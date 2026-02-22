@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>رصيد غير كاف</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="error-box">
+            <h2>⚠️ رصيد غير كاف</h2>
+            <p>عذراً، لا تملك 100 نقطة كافية لبدء لعبة جديدة.</p>
+            <p>يمكنك شحن رصيدك أو كسب نقاط مجانية من خلال:</p>
+            
+            <ul class="earn-options">
+                <li>🎁 المكافأة اليومية</li>
+                <li>📺 مشاهدة الإعلانات</li>
+                <li>🔗 دعوة الأصدقاء</li>
+                <li>💰 الشحن المباشر</li>
+            </ul>
+            
+            <div class="action-buttons">
+                <a href="/charge_points?user={{ user_id }}" class="charge-btn">💰 شحن النقاط</a>
+                <a href="https://t.me/MWBgames_bot" class="bot-btn">🤖 العودة للبوت</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
