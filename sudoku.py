@@ -1,5 +1,4 @@
 import random
-import numpy as np
 
 class SudokuGenerator:
     def __init__(self):
@@ -46,12 +45,13 @@ class SudokuGenerator:
         return self.board
     
     def remove_numbers(self, difficulty):
-        # difficulty: 'easy' (40), 'medium' (50), 'hard' (60)
+        # عدد الخلايا المراد إزالتها حسب المستوى
         cells_to_remove = {
-            'easy': 40,
-            'medium': 50,
-            'hard': 60
-        }.get(difficulty, 40)
+            'easy': 35,      # 46 خانة متبقية
+            'medium': 45,    # 36 خانة متبقية
+            'hard': 55,      # 26 خانة متبقية
+            'expert': 65     # 16 خانة متبقية
+        }.get(difficulty, 45)
         
         puzzle = [row[:] for row in self.board]
         cells = [(i, j) for i in range(9) for j in range(9)]
@@ -71,7 +71,7 @@ class SudokuGenerator:
     
     @staticmethod
     def check_solution(board):
-        # التحقق من صحة الحل
+        # التحقق من عدم وجود خلايا فارغة
         for row in range(9):
             for col in range(9):
                 if board[row][col] == 0:
