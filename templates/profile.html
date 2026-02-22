@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <title>ملفي الشخصي</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h2>📊 ملفي الشخصي</h2>
+        
+        <div class="profile-info">
+            <p><strong>👤 الاسم:</strong> {{ user[2] or user[3] }}</p>
+            <p><strong>💰 النقاط:</strong> {{ user[5] }}</p>
+            <p><strong>🎮 الألعاب:</strong> {{ user[6] }}</p>
+            <p><strong>🏆 الألعاب المكتملة:</strong> {{ user[7] }}</p>
+            <p><strong>📅 تاريخ التسجيل:</strong> {{ user[8] }}</p>
+        </div>
+        
+        <a href="/" class="telegram-btn">🔙 العودة للرئيسية</a>
+    </div>
+</body>
+</html>

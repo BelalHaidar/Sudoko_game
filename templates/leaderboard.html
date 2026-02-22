@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <title>لوحة الشرف</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h2>🏆 لوحة الشرف</h2>
+        
+        <table class="leaderboard-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>الاسم</th>
+                    <th>النقاط</th>
+                    <th>الألعاب</th>
+                    <th>الفوز</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for leader in leaders %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ leader[0] }}</td>
+                    <td>{{ leader[1] }}</td>
+                    <td>{{ leader[2] }}</td>
+                    <td>{{ leader[3] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <a href="/" class="telegram-btn">🔙 العودة للرئيسية</a>
+    </div>
+</body>
+</html>
