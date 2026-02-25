@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # ✅ قراءة الإعدادات من متغيرات البيئة فقط
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-GAME_URL = os.environ.get('GAME_URL', 'http://localhost:5000')
+GAME_URL = os.environ.get('GAME_URL', 'https://sudoko-game-s4dt.onrender.com')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 POINTS_PER_SYP = int(os.environ.get('POINTS_PER_SYP', 10))
 INTERNAL_API_KEY = os.environ.get('INTERNAL_API_KEY')
