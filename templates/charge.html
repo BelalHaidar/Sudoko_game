@@ -1,182 +1,0 @@
-<!DOCTYPE html>
-<html dir="rtl" lang="ar">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>شحن النقاط</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <h2>💰 شحن النقاط</h2>
-        
-        <div class="payment-methods">
-            <h3>اختر طريقة الدفع:</h3>
-            
-            <div class="method-card" onclick="selectMethod('syriatel')">
-                <div class="method-icon">📱</div>
-                <h4>سيرياتيل كاش</h4>
-                <p>اشحن عبر محفظة سيرياتيل كاش</p>
-                <small>تحويل فوري</small>
-            </div>
-            
-            <div class="method-card" onclick="selectMethod('mtn')">
-                <div class="method-icon">📲</div>
-                <h4>MTN Cash</h4>
-                <p>اشحن عبر محفظة MTN Cash</p>
-                <small>تحويل فوري</small>
-            </div>
-            
-            <div class="method-card" onclick="selectMethod('sham')">
-                <div class="method-icon">💳</div>
-                <h4>Sham Cash</h4>
-                <p>اشحن عبر محفظة Sham Cash</p>
-                <small>تحويل فوري</small>
-            </div>
-        </div>
-        
-        <div id="payment-form" style="display: none;">
-            <h3>أدخل بيانات الدفع:</h3>
-            
-            <form id="charge-form" onsubmit="processPayment(event)">
-                <input type="hidden" id="selected-method" name="method">
-                
-                <div class="form-group">
-                    <label for="phone">رقم الهاتف:</label>
-                    <input type="text" id="phone" name="phone" required pattern="[0-9]{10}" placeholder="09xxxxxxxx" maxlength="10">
-                    <small>أدخل رقم الهاتف المرتبط بالمحفظة</small>
-                </div>
-                
-                <div class="form-group">
-                    <label for="amount">المبلغ (ل.س):</label>
-                    <select id="amount" name="amount" required>
-                        <option value="">اختر الباقة</option>
-                        <option value="1000">1000 ل.س = 100 نقطة</option>
-                        <option value="2500">2500 ل.س = 250 نقطة + 25 نقطة هدية</option>
-                        <option value="5000">5000 ل.س = 500 نقطة + 75 نقطة هدية</option>
-                        <option value="10000">10000 ل.س = 1000 نقطة + 200 نقطة هدية</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="code">رمز التأكيد:</label>
-                    <input type="text" id="code" name="code" required pattern="[0-9]{6}" placeholder="أدخل الرمز المرسل إلى هاتفك">
-                    <small>سيتم إرسال رمز تأكيد إلى هاتفك</small>
-                </div>
-                
-                <button type="submit" class="pay-btn">تأكيد الدفع</button>
-            </form>
-        </div>
-        
-        <div id="payment-result" class="message" style="display: none;"></div>
-        
-        <div class="charge-actions">
-            <a href="/" class="back-btn">🔙 العودة للرئيسية</a>
-            <a href="/play?user={{ user_id }}" class="play-btn">🎯 العب الآن</a>
-        </div>
-    </div>
-    
-    <script>
-        var userId = {{ user_id }};
-        var selectedMethod = '';
-        
-        function selectMethod(method) {
-            selectedMethod = method;
-            document.getElementById('selected-method').value = method;
-            document.getElementById('payment-form').style.display = 'block';
-            
-            // إزالة التحديد السابق
-            var cards = document.querySelectorAll('.method-card');
-            for (var i = 0; i < cards.length; i++) {
-                cards[i].classList.remove('selected');
-            }
-            
-            // تحديد البطاقة المختارة
-            event.currentTarget.classList.add('selected');
-            
-            // تمرير لأعلى النموذج
-            document.getElementById('payment-form').scrollIntoView({ behavior: 'smooth' });
-        }
-        
-        function processPayment(event) {
-            event.preventDefault();
-            
-            var method = document.getElementById('selected-method').value;
-            var amount = document.getElementById('amount').value;
-            var phone = document.getElementById('phone').value;
-            var code = document.getElementById('code').value;
-            
-            if (!method || !amount || !phone || !code) {
-                showResult('❌ الرجاء ملء جميع الحقول', 'error');
-                return;
-            }
-            
-            if (phone.length !== 10) {
-                showResult('❌ رقم الهاتف يجب أن يكون 10 أرقام', 'error');
-                return;
-            }
-            
-            if (code.length !== 6) {
-                showResult('❌ رمز التأكيد يجب أن يكون 6 أرقام', 'error');
-                return;
-            }
-            
-            // إظهار رسالة التحميل
-            showResult('🔄 جاري معالجة الدفع...', 'info');
-            
-            // محاكاة عملية الدفع
-            setTimeout(function() {
-                fetch('/process_charge', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        method: method,
-                        amount: amount,
-                        phone: phone
-                    })
-                })
-                .then(function(response) {
-                    return response.json();
-                })
-                .then(function(data) {
-                    if (data.success) {
-                        showResult('✅ تمت عملية الشحن بنجاح! رصيدك الجديد: ' + data.new_points + ' نقطة', 'success');
-                        
-                        // إخفاء النموذج
-                        document.getElementById('payment-form').style.display = 'none';
-                        
-                        // تحديث رابط اللعب
-                        setTimeout(function() {
-                            window.location.href = '/play?user=' + userId;
-                        }, 3000);
-                    } else {
-                        showResult('❌ فشلت عملية الشحن. حاول مرة أخرى.', 'error');
-                    }
-                })
-                .catch(function(error) {
-                    showResult('❌ حدث خطأ في الاتصال. حاول مرة أخرى.', 'error');
-                });
-            }, 2000);
-        }
-        
-        function showResult(message, type) {
-            var resultDiv = document.getElementById('payment-result');
-            resultDiv.style.display = 'block';
-            resultDiv.className = 'message ' + type;
-            resultDiv.textContent = message;
-        }
-        
-        // التحقق من رقم الهاتف أثناء الكتابة
-        document.getElementById('phone').addEventListener('input', function(e) {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-        
-        document.getElementById('code').addEventListener('input', function(e) {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-    </script>
-</body>
-</html>
