@@ -22,6 +22,7 @@ from telegram.ext import (
 # استيراد المكونات المحلية
 from database import Database
 from sudoku import SudokuGenerator
+import multiprocessing
 
 # تحميل الإعدادات
 load_dotenv()
@@ -211,5 +212,19 @@ def run_bot():
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == '__main__':
+
+    bot_process = multiprocessing.Process(target=run_bot, daemon=True)
+    bot_process.start()
+
     threading.Thread(target=run_bot, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+
+
+def start_bot_on_gunicorn():
+    # التأكد من تشغيل البوت مرة واحدة فقط
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true': # لمنع التشغيل المزدوج في وضع Debug
+        bot_process = multiprocessing.Process(target=run_bot, daemon=True)
+        bot_process.start()
+
+# استدعاء الوظيفة عند تحميل الملف بواسطة Gunicorn
+start_bot_on_gunicorn()
