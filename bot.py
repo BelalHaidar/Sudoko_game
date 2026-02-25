@@ -1,716 +1,431 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from database import Database
 import os
+import logging
+import warnings
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, filters, ConversationHandler,
+)
+from dotenv import load_dotenv
+from database import Database
 
-# إعداد التسجيل
+# ✅ تحميل متغيرات البيئة
+load_dotenv()
+
+# ✅ كتم تحذيرات PTB
+warnings.filterwarnings("ignore", category=UserWarning, module='telegram.ext')
+
+# ✅ إعداد التسجيل الآمن
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# التوكن ورابط اللعبة - غير هذه القيم
-BOT_TOKEN = '8128461147:AAHXGMSn95ubi9ytEtv60j_MuPc78A76H5E'  # ضع توكن البوت هنا
-GAME_URL = 'https://sudoko-game-s4dt.onrender.com'  # رابط لعبتك
+# ✅ قراءة الإعدادات من متغيرات البيئة فقط
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+GAME_URL = os.environ.get('GAME_URL', 'http://localhost:5000')
+ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
+POINTS_PER_SYP = int(os.environ.get('POINTS_PER_SYP', 10))
+INTERNAL_API_KEY = os.environ.get('INTERNAL_API_KEY')
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN not set in environment variables!")
 
 db = Database()
 
+# حالات المحادثة
+C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
+W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
+
+CHARGE_PACKAGES = [(50, 500), (100, 1000), (300, 3000), (500, 5000), (1000, 10000)]
+WITHDRAW_PACKAGES = [100, 300, 500, 1000]
+
+WELCOME_TEXT = (
+    "🎮 **أهلاً بك في تحدي السودوكو!**\n\n"
+    "💡 **نظام النقاط:**\n"
+    "سهل: +500 | متوسط: +1000 | صعب: +1500 | خبير: +5000\n\n"
+    "💰 **القيمة:** كل نقطة = 10 ليرات سورية\n"
+    "🎮 تكلفة اللعبة: 100 نقطة\n\n"
+    "✅ **هل توافق على الشروط للبدء؟**"
+)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الأمر الرئيسي /start - ينشئ حساب جديد أو يسجل دخول"""
     user = update.effective_user
-    
-    # إنشاء حساب جديد أو تسجيل دخول
-    user_id = db.create_user(
-        telegram_id=user.id,
-        username=user.username or user.first_name,
-        first_name=user.first_name
-    )
-    
-    # الحصول على نقاط المستخدم
-    points = db.get_user_points(user_id)
-    
-    # رسالة الترحيب
-    welcome_message = f"""
-🎮 **مرحباً بك في لعبة السودوكو يا {user.first_name}!**
-
-✨ تم إنشاء حسابك بنجاح
-💰 **رصيدك الحالي:** {points} نقطة (هدية ترحيبية)
-
-📌 **ماذا يمكنك أن تفعل؟**
-• العب سودوكو واكسب النقاط
-• شاهد إعلانات لشحن رصيدك
-• ادع أصدقائك واحصل على مكافآت
-• تنافس مع الآخرين على لوحة الشرف
-
-👇 اختر من القائمة أدناه:
-    """
-    
-    # إنشاء الأزرار التفاعلية
-    keyboard = [
-        [InlineKeyboardButton("🎯 ابدأ اللعب", url=f"{GAME_URL}/play?user={user.id}")],
-        [
-            InlineKeyboardButton("💰 نقاطي", callback_data='points'),
-            InlineKeyboardButton("🏆 لوحة الشرف", callback_data='leaderboard')
-        ],
-        [
-            InlineKeyboardButton("📊 إحصائياتي", callback_data='stats'),
-            InlineKeyboardButton("🎁 المكافأة اليومية", callback_data='daily')
-        ],
-        [
-            InlineKeyboardButton("🔗 رابط دعوة", callback_data='referral'),
-            InlineKeyboardButton("❓ تعليمات", callback_data='help')
-        ]
-    ]
-    
-    # إضافة زر لوحة التحكم للمشرفين
-    if db.is_admin(user.id):
-        keyboard.append([InlineKeyboardButton("🛠️ لوحة تحكم المشرف", callback_data='admin_panel')])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /play - بدء لعبة جديدة"""
-    user = update.effective_user
+    db.create_user(user.id, user.username or user.first_name, user.first_name)
     user_data = db.get_user_by_telegram_id(user.id)
     
-    if not user_data:
-        await update.message.reply_text("❌ الرجاء استخدام /start أولاً")
-        return
+    welcome_text = f"🎮 **مرحباً بك يا {user.first_name}!**\n💰 رصيدك: {user_data['points']} نقطة"
     
-    # التحقق من وجود نقاط كافية
-    if user_data[5] < 100:
-        keyboard = [[InlineKeyboardButton("💰 شحن نقاط", url=f"{GAME_URL}/charge_points?user={user.id}")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "❌ رصيدك غير كافٍ لبدء لعبة جديدة (تحتاج 100 نقطة).\n"
-            "يمكنك شحن رصيدك من خلال الرابط أدناه:",
-            reply_markup=reply_markup
-        )
-        return
-    
-    # اختيار مستوى الصعوبة
     keyboard = [
+        [InlineKeyboardButton("🎯 ابدأ اللعب", callback_data='choose_level')],
         [
-            InlineKeyboardButton("🥉 سهل", callback_data='difficulty_easy'),
-            InlineKeyboardButton("🥈 متوسط", callback_data='difficulty_medium')
+            InlineKeyboardButton("💳 شحن نقاط", callback_data='start_charge'),
+            InlineKeyboardButton("💰 سحب رصيد", callback_data='start_withdraw')
         ],
-        [
-            InlineKeyboardButton("🥇 صعب", callback_data='difficulty_hard'),
-            InlineKeyboardButton("👑 خبير", callback_data='difficulty_expert')
-        ]
+        [InlineKeyboardButton("👤 معلومات حسابي", callback_data='profile')],
+        [InlineKeyboardButton("📞 الدعم الفني", url="https://t.me/AskBelal")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
+    await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def terms_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "terms_accept":
+        db.update_terms(query.from_user.id, 1)
+        await show_main_menu(update, is_query=True)
+
+async def show_main_menu(update, is_query=False):
+    user_id = update.effective_user.id if hasattr(update, 'effective_user') else update.callback_query.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    text = f"🎮 **القائمة**\n👤 {user.get('first_name', 'لاعب')}\n💰 الرصيد: {user['points']} نقطة" if user else "❌ خطأ"
+    kb = [
+        [InlineKeyboardButton("🎯 لعب", callback_data='choose_level')],
+        [InlineKeyboardButton("💳 شحن", callback_data='start_charge'),
+         InlineKeyboardButton("💰 سحب", callback_data='start_withdraw')],
+        [InlineKeyboardButton("👤 حسابي", callback_data='profile')],
+        [InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
+    ]
+    if is_query and update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def choose_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    kb = [
+        [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={query.from_user.id}&difficulty=easy")],
+        [InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={query.from_user.id}&difficulty=medium")],
+        [InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={query.from_user.id}&difficulty=hard")],
+        [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={query.from_user.id}&difficulty=expert")],
+        [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
+    ]
+    await query.edit_message_text("🎯 **اختر مستوى الصعوبة:**\n(تكلفة: 100 نقطة)", 
+                                   reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+# ========== نظام الشحن ==========
+async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton(f"📦 {syp}ل.س ({pts} نقطة)", callback_data=f"cp_{syp}_{pts}")] 
+        for syp, pts in CHARGE_PACKAGES
+    ]
+    keyboard.append([InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')])
+    await query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return C_PKG
+
+async def charge_method_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['c_pkg'] = query.data
+    keyboard = [
+        [InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')],
+        [InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')],
+        [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]
+    ]
+    await query.edit_message_text("🏦 **اختر طريقة الدفع:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return C_METH
+
+async def charge_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    method = query.data.split('_')[1]
+    context.user_data['c_meth'] = method
+    instr = "✅ **سيرياتيل:**\nحوّل إلى: `49725859` أو `22866918`" if method == 'Syriatel' else "✅ **MTN:**\nحوّل إلى: `8598040534523762`"
+    await query.edit_message_text(f"{instr}\n\n📱 **أرسل رقم الهاتف** الذي حوّلت منه:", parse_mode='Markdown')
+    return C_PHONE
+
+async def charge_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
+    if not phone.isdigit() or len(phone) < 7:
+        await update.message.reply_text("❌ رقم غير صالح. أرسل الرقم مرة أخرى:")
+        return C_PHONE
+    context.user_data['c_phone'] = phone
+    await update.message.reply_text("🔢 **أرسل رقم العملية (Transaction ID)**:")
+    return C_TRANS
+
+async def charge_trans_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    trans_id = update.message.text.strip()
+    context.user_data['c_trans'] = trans_id
+    phone = context.user_data['c_phone']
+    pkg = context.user_data['c_pkg'].split('_')
+    amount_syp, points = int(pkg[1]), int(pkg[2])
+    method_name = "سيرياتيل" if context.user_data['c_meth'] == 'Syriatel' else "MTN"
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ تأكيد", callback_data='c_confirm')],
+        [InlineKeyboardButton("❌ إلغاء", callback_data='back_to_menu')]
+    ]
     await update.message.reply_text(
-        "🎯 **اختر مستوى الصعوبة:**\n\n"
-        "🥉 سهل: +125 نقطة\n"
-        "🥈 متوسط: +200 نقطة\n"
-        "🥇 صعب: +300 نقطة\n"
-        "👑 خبير: +500 نقطة",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        f"📋 **تأكيد الشحن:**\n📦 {amount_syp}ل.س = {points}ن\n🏦 {method_name}\n📱 `{phone}`\n🔢 `{trans_id}`\n\n⚠️ تأكد من البيانات",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
     )
+    return C_CONFIRM
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /profile - عرض الملف الشخصي"""
-    user = update.effective_user
-    user_data = db.get_user_by_telegram_id(user.id)
-    
-    if not user_data:
-        await update.message.reply_text("❌ الرجاء استخدام /start أولاً")
-        return
-    
-    # حساب نسبة الفوز
-    win_rate = 0
-    if user_data[6] > 0:
-        win_rate = round((user_data[7] / user_data[6]) * 100, 1)
-    
-    stats = f"""
-📊 **ملفك الشخصي**
-
-👤 **الاسم:** {user_data[3] or user_data[2]}
-🆔 **المعرف:** {user_data[1]}
-💰 **النقاط:** {user_data[5]}
-🎮 **الألعاب:** {user_data[6]}
-🏆 **الألعاب المكتملة:** {user_data[7]}
-📊 **نسبة الفوز:** {win_rate}%
-📅 **تاريخ التسجيل:** {user_data[8][:10]}
-    """
-    
-    keyboard = [
-        [InlineKeyboardButton("🎯 العب الآن", url=f"{GAME_URL}/play?user={user.id}")],
-        [InlineKeyboardButton("📊 سجل المعاملات", callback_data='my_transactions')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(stats, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /points - عرض النقاط"""
-    user = update.effective_user
-    user_data = db.get_user_by_telegram_id(user.id)
-    
-    if not user_data:
-        await update.message.reply_text("❌ الرجاء استخدام /start أولاً")
-        return
-    
-    points = db.get_user_points(user_data[0])
-    
-    message = f"""
-💰 **رصيد النقاط**
-
-**نقاطك الحالية:** {points} نقطة
-
-**🎁 كيف تربح المزيد؟**
-• إكمال لغز سهل: +125 نقطة
-• إكمال لغز متوسط: +200 نقطة
-• إكمال لغز صعب: +300 نقطة
-• إكمال لغز خبير: +500 نقطة
-• مشاهدة إعلان: +10 نقاط
-• دعوة صديق: +20 نقطة
-• المكافأة اليومية: +15 نقطة
-    """
-    
-    keyboard = [
-        [InlineKeyboardButton("💰 شحن نقاط", url=f"{GAME_URL}/charge_points?user={user.id}")],
-        [InlineKeyboardButton("🎯 العب الآن", url=f"{GAME_URL}/play?user={user.id}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /leaderboard - عرض لوحة الشرف"""
-    leaders = db.get_leaderboard(10)
-    
-    if not leaders:
-        await update.message.reply_text("🏆 لا يوجد متسابقين بعد. كن أول من يلعب!")
-        return
-    
-    leader_text = "🏆 **لوحة الشرف**\n\n"
-    
-    for i, leader in enumerate(leaders, 1):
-        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-        medal = medals.get(i, f"{i}.")
-        leader_text += f"{medal} **{leader[0]}**\n"
-        leader_text += f"   ⭐ {leader[1]} نقطة | 🎮 {leader[2]} لعبة\n"
-    
-    user = update.effective_user
-    keyboard = [[InlineKeyboardButton("🎯 العب الآن", url=f"{GAME_URL}/play?user={user.id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(leader_text, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /help - عرض المساعدة"""
-    help_text = """
-❓ **كيفية اللعب**
-
-🎯 **قواعد السودوكو:**
-• املأ الشبكة بالأرقام من 1-9
-• كل رقم يظهر مرة واحدة في كل صف
-• كل رقم يظهر مرة واحدة في كل عمود
-• كل رقم يظهر مرة واحدة في كل مربع 3×3
-
-💰 **نظام النقاط:**
-• بدء لعبة جديدة: -100 نقطة
-• إكمال لغز سهل: +125 نقطة
-• إكمال لغز متوسط: +200 نقطة
-• إكمال لغز صعب: +300 نقطة
-• إكمال لغز خبير: +500 نقطة
-• مشاهدة إعلان: +10 نقاط
-• دعوة صديق: +20 نقطة
-• مكافأة يومية: +15 نقطة
-• تلميح: -50 نقطة
-
-📋 **قائمة الأوامر:**
-/start - بدء استخدام البوت
-/play - بدء لعبة جديدة
-/profile - عرض الملف الشخصي
-/points - عرض النقاط
-/leaderboard - لوحة الشرف
-/help - هذه المساعدة
-/referral - رابط دعوة
-/daily - المكافأة اليومية
-/charge - شحن النقاط
-    """
-    
-    await update.message.reply_text(help_text, parse_mode='Markdown')
-
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /referral - إنشاء رابط دعوة"""
-    user = update.effective_user
-    
-    bot_username = (await context.bot.get_me()).username
-    referral_link = f"https://t.me/{bot_username}?start={user.id}"
-    
-    message = f"""
-🔗 **رابط دعوتك الشخصي**
-
-انسخ الرابط وأرسله لأصدقائك:
-`{referral_link}`
-
-🎁 **المكافآت:**
-• لكل صديق يسجل عبر رابطك: +20 نقطة
-• لكل 5 أصدقاء: +100 نقطة إضافية
-• لكل 10 أصدقاء: وسام خاص في الملف الشخصي
-    """
-    
-    keyboard = [[InlineKeyboardButton("📤 مشاركة الرابط", switch_inline_query=f"العب معي سودوكو! {referral_link}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /daily - المكافأة اليومية"""
-    user = update.effective_user
-    user_data = db.get_user_by_telegram_id(user.id)
-    
-    if not user_data:
-        await update.message.reply_text("❌ الرجاء استخدام /start أولاً")
-        return
-    
-    # التحقق من إمكانية الحصول على المكافأة
-    if db.can_claim_daily(user_data[0]):
-        db.add_points(user_data[0], 15, "مكافأة يومية")
-        message = """
-🎁 **المكافأة اليومية**
-
-✅ تم إضافة **15 نقطة** إلى رصيدك!
-تعال غداً للحصول على مكافأة جديدة.
-        """
-    else:
-        message = """
-⏳ **المكافأة اليومية**
-
-لا يمكنك الحصول على المكافأة الآن.
-المكافأة متاحة مرة واحدة كل 24 ساعة.
-        """
-    
-    keyboard = [[InlineKeyboardButton("🎯 العب الآن", url=f"{GAME_URL}/play?user={user.id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /charge - شحن النقاط"""
-    user = update.effective_user
-    
-    charge_url = f"{GAME_URL}/charge_points?user={user.id}"
-    
-    keyboard = [[InlineKeyboardButton("💰 شحن الآن", url=charge_url)]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    message = """
-💰 **شحن النقاط**
-
-اختر طريقة الدفع المناسبة لك:
-• 📱 سيرياتيل كاش
-• 📲 MTN Cash
-• 💳 Sham Cash
-
-**الباقات المتوفرة:**
-• 1000 ل.س = 100 نقطة
-• 2500 ل.س = 250 نقطة + 25 هدية
-• 5000 ل.س = 500 نقطة + 75 هدية
-• 10000 ل.س = 1000 نقطة + 200 هدية
-
-⚠️ بعد الدفع، سيتم مراجعة طلبك وإضافة النقاط يدوياً.
-    """
-    
-    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-# ==================== أوامر المشرف ====================
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لوحة تحكم المشرف - /admin"""
+async def charge_step_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user = update.effective_user
+    pkg = context.user_data['c_pkg'].split('_')
+    amount_syp, points = int(pkg[1]), int(pkg[2])
+    method_name = "سيرياتيل" if context.user_data['c_meth'] == 'Syriatel' else "MTN"
+    phone = context.user_data['c_phone']
+    trans_id = context.user_data['c_trans']
     
-    if not db.is_admin(user.id):
-        await query.edit_message_text("⛔ هذا الأمر مخصص للمشرفين فقط.")
-        return
+    user_db = db.get_user_by_telegram_id(query.from_user.id)
+    rid = db.create_charge_request(user_db['id'], amount_syp, points, method_name, phone, trans_id)
     
-    keyboard = [
-        [InlineKeyboardButton("📊 إحصائيات النظام", callback_data='admin_stats')],
-        [InlineKeyboardButton("👥 إدارة المستخدمين", callback_data='admin_users')],
-        [InlineKeyboardButton("💰 طلبات الشحن", callback_data='admin_charges')],
-        [InlineKeyboardButton("📝 سجل المعاملات", callback_data='admin_transactions')],
-        [InlineKeyboardButton("🎮 إحصائيات الألعاب", callback_data='admin_games')],
-        [InlineKeyboardButton("👑 إدارة المشرفين", callback_data='admin_manage')],
+    admin_kb = [
+        [InlineKeyboardButton("✅ قبول", callback_data=f"appc_{rid}")],
+        [InlineKeyboardButton("❌ رفض", callback_data=f"rejc_{rid}")]
     ]
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(
+        ADMIN_ID,
+        f"🔔 **شحن جديد #{rid}**\n👤 {query.from_user.first_name} (`{query.from_user.id}`)\n"
+        f"📦 {amount_syp}ل.س = {points}ن\n🏦 {method_name}\n📱 `{phone}`\n🔢 `{trans_id}`",
+        reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown'
+    )
+    await query.edit_message_text("✅ **تم استلام الطلب!** سيتم إخطارك عند التنفيذ.")
+    return ConversationHandler.END
+
+# ========== نظام السحب ==========
+async def start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='wm_Syriatel'), 
+         InlineKeyboardButton("🟡 MTN", callback_data='wm_MTN')],
+        [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]
+    ]
+    await query.edit_message_text("🏦 **اختر طريقة الاستلام:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return W_METH
+
+async def withdraw_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['w_meth'] = query.data.split('_')[1]
+    keyboard = [
+        [InlineKeyboardButton(f"{syp} ل.س ({syp*100} نقطة)", callback_data=f"wa_{syp}_{syp*100}")]
+        for syp in WITHDRAW_PACKAGES
+    ]
+    keyboard.append([InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')])
+    await query.edit_message_text("💰 **اختر المبلغ:**\n(عمولة 10% تُخصم)", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return W_AMT
+
+async def withdraw_amount_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, amount_syp, points = query.data.split('_')
+    amount_syp, points = int(amount_syp), int(points)
+    commission = int(amount_syp * 0.10)
+    final = amount_syp - commission
+    context.user_data.update({'w_amount': amount_syp, 'w_points': points, 'w_final': final})
+    
     await query.edit_message_text(
-        "🛠️ **لوحة تحكم المشرف**\n\nاختر ما تريد:", 
-        reply_markup=reply_markup,
+        f"⚠️ **تأكيد السحب:**\n💰 المطلوب: {amount_syp} ل.س\n✂️ العمولة: -{commission} ل.س\n"
+        f"✅ **سيصلك: {final} ل.س**\n📊 يُخصم: {points} نقطة\n\n📱 **أرسل رقم الهاتف** للاستلام:",
+        parse_mode='Markdown'
+    )
+    return W_PHONE
+
+async def withdraw_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
+    if not phone.isdigit() or len(phone) < 7:
+        await update.message.reply_text("❌ رقم غير صالح. أرسل الرقم مرة أخرى:")
+        return W_PHONE
+    context.user_data['w_phone'] = phone
+    
+    pkg = context.user_data
+    keyboard = [
+        [InlineKeyboardButton("✅ تأكيد", callback_data='w_confirm')],
+        [InlineKeyboardButton("❌ إلغاء", callback_data='back_to_menu')]
+    ]
+    await update.message.reply_text(
+        f"📋 **تأكيد السحب:**\n💰 الأصلي: {pkg['w_amount']}ل.س | ✂️ العمولة: {int(pkg['w_amount']*0.10)}ل.س\n"
+        f"✅ **سيصلك: {pkg['w_final']}ل.س** | 📊 يُخصم: {pkg['w_points']}ن\n📱 `{phone}`\n\n⚠️ تأكد من البيانات",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
+    )
+    return W_CONFIRM
+
+async def withdraw_step_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    pkg = context.user_data
+    phone = pkg['w_phone']
+    user_db = db.get_user_by_telegram_id(query.from_user.id)
+    
+    if user_db['points'] < pkg['w_points']:
+        await query.edit_message_text("❌ رصيدك غير كافٍ!")
+        return ConversationHandler.END
+    
+    db.deduct_points(user_db['id'], pkg['w_points'])
+    rid = db.create_withdrawal_request(
+        user_db['id'], pkg['w_points'], pkg['w_amount'], pkg['w_final'], pkg['w_meth'], phone
+    )
+    
+    admin_kb = [
+        [InlineKeyboardButton("✅ قبول", callback_data=f"appw_{rid}")],
+        [InlineKeyboardButton("❌ رفض", callback_data=f"rejw_{rid}")]
+    ]
+    
+    await context.bot.send_message(
+        ADMIN_ID,
+        f"💸 **سحب جديد #{rid}**\n👤 {query.from_user.first_name} (`{query.from_user.id}`)\n"
+        f"💰 الأصلي: {pkg['w_amount']}ل.س | ✂️ العمولة: {int(pkg['w_amount']*0.10)}ل.س\n"
+        f"✅ **للتحويل: {pkg['w_final']}ل.س** | 📊 يُخصم: {pkg['w_points']}ن\n📱 `{phone}`",
+        reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown'
+    )
+    await query.edit_message_text("✅ **تم استلام طلب السحب!** سيتم إخطارك عند التنفيذ.")
+    return ConversationHandler.END
+
+# ========== قرارات الأدمن ==========
+async def handle_admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    await query.answer()
+    
+    try:
+        action = data[:4]
+        rid = int(data[5:])
+        
+        if action in ["appc", "rejc"]:
+            charge_data = db.get_charge_request_details(rid)
+            if not charge_data:
+                await query.edit_message_text(f"❌ الطلب #{rid} غير موجود")
+                return
+            
+            player_tid = charge_data.get('telegram_id')
+            if not player_tid:
+                await query.edit_message_text(f"❌ لا يمكن تحديد اللاعب")
+                return
+            
+            if action == "appc":
+                db.update_charge_status(rid, 'approved', query.from_user.id)
+                await context.bot.send_message(
+                    player_tid,
+                    f"🎉 **تم قبول شحنك!**\n\n✅ أُضيف **{charge_data['points']} نقطة**\n"
+                    f"💰 القيمة: {charge_data['points'] * POINTS_PER_SYP:,} ل.س\n\n🎮 ابدأ اللعب!"
+                )
+                await query.edit_message_text(f"✅ **تم قبول الشحن #{rid}**")
+            else:
+                db.update_charge_status(rid, 'rejected', query.from_user.id)
+                await context.bot.send_message(
+                    player_tid,
+                    "❌ **تم رفض طلب الشحن**\n\n⚠️ يرجى التأكد من:\n• رقم الهاتف\n• رقم العملية\n\nثم أعد المحاولة."
+                )
+                await query.edit_message_text(f"❌ **تم رفض الشحن #{rid}**")
+                
+        elif action in ["appw", "rejw"]:
+            withdraw_data = db.get_withdraw_details(rid)
+            if not withdraw_data:
+                await query.edit_message_text(f"❌ الطلب #{rid} غير موجود")
+                return
+            
+            player_tid = withdraw_data.get('telegram_id')
+            if not player_tid:
+                await query.edit_message_text(f"❌ لا يمكن تحديد اللاعب")
+                return
+            
+            if action == "appw":
+                db.update_withdraw_status(rid, 'approved')
+                await context.bot.send_message(
+                    player_tid,
+                    f"💸 **تم قبول سحبك!**\n\n✅ سيتم تحويل **{withdraw_data['final_amount']} ل.س** إلى:\n"
+                    f"📱 `{withdraw_data['receiver_phone']}`\n\n⏱️ **سيصلك خلال ساعة**"
+                )
+                await query.edit_message_text(f"✅ **تم قبول السحب #{rid}**")
+            else:
+                db.add_points(withdraw_data['user_id'], withdraw_data['amount_points'])
+                db.update_withdraw_status(rid, 'rejected')
+                await context.bot.send_message(
+                    player_tid,
+                    "❌ **تم رفض السحب**\n\n⚠️ الرجاء التأكد من:\n• رقم الهاتف\n• صحة البيانات\n\nثم أعد المحاولة."
+                )
+                await query.edit_message_text(f"❌ **تم رفض السحب #{rid}**")
+                
+    except Exception as e:
+        logger.error(f"Error in admin decision: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ خطأ: {str(e)}")
+
+# ========== أوامر المستخدم ==========
+async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_data = db.get_user_by_telegram_id(query.from_user.id)
+    syp = user_data['points'] * POINTS_PER_SYP
+    await query.edit_message_text(
+        f"👤 **معلومات حسابك:**\n\n🆔 `{user_data['telegram_id']}`\n"
+        f"👤 {user_data.get('first_name', 'لاعب')}\n💰 **{user_data['points']} نقطة**\n💵 **{syp:,} ل.س**",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]),
         parse_mode='Markdown'
     )
 
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض إحصائيات النظام"""
-    query = update.callback_query
-    await query.answer()
-    
-    stats = db.get_system_stats()
-    
-    message = f"""
-📊 **إحصائيات النظام**
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        await update.callback_query.answer("✅ تم الإلغاء")
+        await show_main_menu_simple(update.callback_query.from_user.id, update.callback_query)
+    elif update.message:
+        await update.message.reply_text("✅ **تم الإلغاء والعودة للقائمة**")
+        await show_main_menu_simple(update.effective_user.id)
+    return ConversationHandler.END
 
-👥 **المستخدمين:**
-• إجمالي المستخدمين: {stats['total_users']}
-• نشط اليوم: {stats['active_today']}
-
-💰 **النقاط:**
-• إجمالي النقاط: {stats['total_points']}
-• متوسط النقاط: {stats['avg_points']}
-
-🎮 **الألعاب:**
-• إجمالي الألعاب: {stats['total_games']}
-• الألعاب المكتملة: {stats['completed_games']}
-
-📝 **المعاملات:**
-• إجمالي المعاملات: {stats['total_transactions']}
-• طلبات شحن معلقة: {stats['pending_charges']}
-    """
-    
-    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data='admin_panel')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض قائمة المستخدمين"""
-    query = update.callback_query
-    await query.answer()
-    
-    users, total = db.get_all_users(page=1)
-    
-    message = f"👥 **المستخدمين** (الإجمالي: {total})\n\n"
-    
-    for user in users[:10]:
-        message += f"🆔 {user[1]}\n"
-        message += f"👤 {user[3]} (@{user[2]})\n"
-        message += f"💰 {user[4]} نقطة | 🎮 {user[5]} لعبة\n"
-        message += f"📅 {user[7][:10]}\n"
-        message += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("🔍 بحث عن مستخدم", callback_data='admin_search_user')],
-        [InlineKeyboardButton("📄 الصفحة التالية", callback_data='admin_users_page_2')],
-        [InlineKeyboardButton("🔙 رجوع", callback_data='admin_panel')]
+async def show_main_menu_simple(user_id, query=None):
+    user = db.get_user_by_telegram_id(user_id)
+    text = f"🎮 **القائمة**\n👤 {user.get('first_name', 'لاعب')}\n💰 الرصيد: {user['points']} نقطة" if user else "❌ خطأ"
+    kb = [
+        [InlineKeyboardButton("🎯 لعب", callback_data='choose_level')],
+        [InlineKeyboardButton("💳 شحن", callback_data='start_charge'),
+         InlineKeyboardButton("💰 سحب", callback_data='start_withdraw')],
+        [InlineKeyboardButton("👤 حسابي", callback_data='profile')],
+        [InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def admin_charges(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض طلبات الشحن المعلقة"""
-    query = update.callback_query
-    await query.answer()
-    
-    requests = db.get_charge_requests('pending')
-    
-    if not requests:
-        await query.edit_message_text("✅ لا توجد طلبات شحن معلقة حالياً.")
-        return
-    
-    for req in requests[:5]:
-        message = f"""
-💰 **طلب شحن #{req[0]}**
-
-👤 **المستخدم:** {req[3]} (@{req[2]})
-💵 **المبلغ:** {req[4]} ل.س
-⭐ **النقاط:** {req[5]}
-📱 **طريقة الدفع:** {req[6]}
-📞 **الرقم:** {req[7]}
-🕐 **التاريخ:** {req[9][:16]}
-        """
-        
-        keyboard = [
-            [
-                InlineKeyboardButton(f"✅ قبول", callback_data=f'approve_charge_{req[0]}'),
-                InlineKeyboardButton(f"❌ رفض", callback_data=f'reject_charge_{req[0]}')
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-    
-    # حذف الرسالة الأصلية
-    await query.message.delete()
-
-async def approve_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الموافقة على طلب شحن"""
-    query = update.callback_query
-    await query.answer()
-    
-    request_id = int(query.data.split('_')[2])
-    admin = update.effective_user
-    
-    db.update_charge_status(request_id, 'approved', admin.id)
-    
-    await query.edit_message_text(f"✅ تمت الموافقة على طلب الشحن #{request_id}")
-
-async def reject_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """رفض طلب شحن"""
-    query = update.callback_query
-    await query.answer()
-    
-    request_id = int(query.data.split('_')[2])
-    admin = update.effective_user
-    
-    db.update_charge_status(request_id, 'rejected', admin.id)
-    
-    await query.edit_message_text(f"❌ تم رفض طلب الشحن #{request_id}")
-
-async def admin_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض سجل المعاملات"""
-    query = update.callback_query
-    await query.answer()
-    
-    transactions, total = db.get_all_transactions(page=1, per_page=10)
-    
-    message = f"📝 **آخر المعاملات** (الإجمالي: {total})\n\n"
-    
-    for trans in transactions:
-        emoji = {
-            'earn': '➕',
-            'spend': '➖',
-            'bonus': '🎁',
-            'admin_add': '💰',
-            'admin_remove': '🔻'
-        }.get(trans[5], '🔄')
-        
-        message += f"{emoji} **{trans[3]}**\n"
-        message += f"   المبلغ: {trans[4]} نقطة\n"
-        message += f"   النوع: {trans[5]}\n"
-        message += f"   {trans[7][:16]}\n"
-        message += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-    
-    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data='admin_panel')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def my_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض معاملات المستخدم"""
-    query = update.callback_query
-    await query.answer()
-    
-    user = update.effective_user
-    user_data = db.get_user_by_telegram_id(user.id)
-    
-    if not user_data:
-        await query.edit_message_text("❌ الرجاء استخدام /start أولاً")
-        return
-    
-    transactions = db.get_user_transactions(user_data[0], 10)
-    
-    message = "📊 **آخر معاملاتك**\n\n"
-    
-    for trans in transactions:
-        emoji = '➕' if trans[1] > 0 else '➖'
-        message += f"{emoji} {abs(trans[1])} نقطة - {trans[3]}\n"
-        message += f"   🕐 {trans[4][:16]}\n"
-        message += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-    
-    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج الأزرار التفاعلية الرئيسي"""
-    query = update.callback_query
-    await query.answer()
-    
-    user = update.effective_user
-    user_data = db.get_user_by_telegram_id(user.id)
-    
-    if not user_data and not query.data.startswith('admin_'):
-        await query.edit_message_text("❌ الرجاء استخدام /start أولاً")
-        return
-    
-    user_id = user_data[0] if user_data else None
-    
-    # معالجة اختيار مستوى الصعوبة
-    if query.data.startswith('difficulty_'):
-        difficulty = query.data.replace('difficulty_', '')
-        play_url = f"{GAME_URL}/play?user={user.id}&difficulty={difficulty}"
-        
-        keyboard = [[InlineKeyboardButton("🎯 اضغط لبدء اللعبة", url=play_url)]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"✅ تم اختيار المستوى: **{difficulty}**\n\n"
-            "اضغط على الزر لبدء اللعبة:",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == 'points':
-        points = db.get_user_points(user_id)
-        await query.edit_message_text(
-            f"💰 **نقاطك الحالية:** {points} نقطة",
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == 'leaderboard':
-        leaders = db.get_leaderboard(5)
-        text = "🏆 **أفضل 5 لاعبين:**\n\n"
-        for i, leader in enumerate(leaders, 1):
-            text += f"{i}. {leader[0]}: {leader[1]} نقطة\n"
-        await query.edit_message_text(text, parse_mode='Markdown')
-    
-    elif query.data == 'stats':
-        stats = f"""
-📊 **إحصائياتك:**
-• النقاط: {user_data[5]}
-• الألعاب: {user_data[6]}
-• الألعاب المكتملة: {user_data[7]}
-        """
-        await query.edit_message_text(stats, parse_mode='Markdown')
-    
-    elif query.data == 'daily':
-        if db.can_claim_daily(user_id):
-            db.add_points(user_id, 15, "مكافأة يومية")
-            await query.edit_message_text("✅ تمت إضافة 15 نقطة مكافأة يومية!")
-        else:
-            await query.edit_message_text("⏳ يمكنك الحصول على المكافأة مرة كل 24 ساعة.")
-    
-    elif query.data == 'referral':
-        bot_username = (await context.bot.get_me()).username
-        referral_link = f"https://t.me/{bot_username}?start={user.id}"
-        await query.edit_message_text(
-            f"🔗 رابط دعوتك:\n`{referral_link}`",
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == 'help':
-        await help_command(update, context)
-    
-    elif query.data == 'my_transactions':
-        await my_transactions(update, context)
-    
-    elif query.data == 'admin_panel':
-        await admin_panel(update, context)
-    
-    elif query.data == 'admin_stats':
-        await admin_stats(update, context)
-    
-    elif query.data == 'admin_users':
-        await admin_users(update, context)
-    
-    elif query.data == 'admin_charges':
-        await admin_charges(update, context)
-    
-    elif query.data == 'admin_transactions':
-        await admin_transactions(update, context)
-    
-    elif query.data.startswith('approve_charge_'):
-        await approve_charge(update, context)
-    
-    elif query.data.startswith('reject_charge_'):
-        await reject_charge(update, context)
-    
-    elif query.data == 'back_to_main':
-        # العودة للقائمة الرئيسية
-        keyboard = [
-            [InlineKeyboardButton("🎯 ابدأ اللعب", url=f"{GAME_URL}/play?user={user.id}")],
-            [
-                InlineKeyboardButton("💰 نقاطي", callback_data='points'),
-                InlineKeyboardButton("🏆 لوحة الشرف", callback_data='leaderboard')
-            ],
-            [
-                InlineKeyboardButton("📊 إحصائياتي", callback_data='stats'),
-                InlineKeyboardButton("🎁 المكافأة اليومية", callback_data='daily')
-            ],
-            [
-                InlineKeyboardButton("🔗 رابط دعوة", callback_data='referral'),
-                InlineKeyboardButton("❓ تعليمات", callback_data='help')
-            ]
-        ]
-        
-        if db.is_admin(user.id):
-            keyboard.append([InlineKeyboardButton("🛠️ لوحة تحكم المشرف", callback_data='admin_panel')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "🎮 **القائمة الرئيسية**\nاختر ما تريد:",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-
-async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج روابط الدعوة"""
-    if context.args and len(context.args) > 0:
-        referrer_id = int(context.args[0])
-        new_user = update.effective_user
-        
-        # إنشاء حساب للمستخدم الجديد
-        user_id = db.create_user(
-            telegram_id=new_user.id,
-            username=new_user.username or new_user.first_name,
-            first_name=new_user.first_name
-        )
-        
-        # مكافأة المُحيل
-        db.add_points(referrer_id, 20, "مكافأة دعوة")
-        
-        await update.message.reply_text(
-            "🎉 **مرحباً بك!**\n\n"
-            "تمت إضافة 100 نقطة ترحيبية لحسابك.\n"
-            "وشكراً لصديقك على الدعوة! استمتع باللعب.",
-            parse_mode='Markdown'
-        )
-    else:
-        await start(update, context)
-
-async def set_commands(application):
-    """تعيين قائمة الأوامر في البوت"""
-    commands = [
-        ("start", "بدء استخدام البوت"),
-        ("play", "بدء لعبة جديدة"),
-        ("profile", "عرض الملف الشخصي"),
-        ("points", "عرض نقاطك"),
-        ("leaderboard", "عرض لوحة الشرف"),
-        ("daily", "المكافأة اليومية"),
-        ("referral", "رابط الدعوة"),
-        ("charge", "شحن النقاط"),
-        ("help", "عرض المساعدة"),
-    ]
-    
-    await application.bot.set_my_commands(commands)
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 def main():
-    """الدالة الرئيسية لتشغيل البوت"""
-    # إنشاء التطبيق
-    application = Application.builder().token(BOT_TOKEN).build()
+    # ✅ إعداد التطبيق مع مهلات شبكة أطول
+    application = Application.builder().token(BOT_TOKEN).connect_timeout(60).read_timeout(60).build()
+
+    charge_h = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
+        states={
+            C_PKG: [CallbackQueryHandler(charge_method_menu, pattern='^cp_')],
+            C_METH: [CallbackQueryHandler(charge_method_selected, pattern='^cm_')],
+            C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_input)],
+            C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
+            C_CONFIRM: [CallbackQueryHandler(charge_step_final, pattern='^c_confirm$')]
+        },
+        fallbacks=[CommandHandler('start', start), CallbackQueryHandler(cancel_handler, pattern='^back_to_menu$')]
+    )
+
+    withdraw_h = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
+        states={
+            W_METH: [CallbackQueryHandler(withdraw_method_selected, pattern='^wm_')],
+            W_AMT: [CallbackQueryHandler(withdraw_amount_selected, pattern='^wa_')],
+            W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
+            W_CONFIRM: [CallbackQueryHandler(withdraw_step_final, pattern='^w_confirm$')]
+        },
+        fallbacks=[CommandHandler('start', start), CallbackQueryHandler(cancel_handler, pattern='^back_to_menu$')]
+    )
+
+    application.add_handler(charge_h)
+    application.add_handler(withdraw_h)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel_handler))
+    application.add_handler(CallbackQueryHandler(choose_level, pattern='^choose_level$'))
+    application.add_handler(CallbackQueryHandler(handle_admin_decision, pattern='^(appc|rejc|appw|rejw)_'))
+    application.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
+    application.add_handler(CallbackQueryHandler(cancel_handler, pattern='^back_to_menu$'))
     
-    # إضافة معالجات الأوامر
-    application.add_handler(CommandHandler("start", referral_handler))
-    application.add_handler(CommandHandler("play", play))
-    application.add_handler(CommandHandler("profile", profile))
-    application.add_handler(CommandHandler("points", points))
-    application.add_handler(CommandHandler("leaderboard", leaderboard))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("referral", referral))
-    application.add_handler(CommandHandler("daily", daily))
-    application.add_handler(CommandHandler("charge", charge))
-    
-    # معالج الأزرار
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # تعيين الأوامر عند بدء التشغيل
-    application.post_init = set_commands
-    
-    # تشغيل البوت
-    print("🤖 البوت يعمل...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("🤖 Bot started successfully")
+    print("🤖 بوت سودوكو يعمل بنجاح...")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
