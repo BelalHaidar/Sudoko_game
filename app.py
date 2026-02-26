@@ -38,7 +38,7 @@ limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 db = Database()
 generator = SudokuGenerator()
 
-# الثوابت والقيم المعتمدة
+# الثوابت والقيم المعتمدة بناءً على متطلبات المشروع
 REWARDS = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
 GAME_COST = 100
 HINT_COST = 50
@@ -47,7 +47,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GAME_URL = os.environ.get('GAME_URL')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 
-# حالات المحادثة للبوت
+# حالات المحادثة
 C_PKG, C_METH, C_PHONE, C_TRANS = range(4)
 W_METH, W_AMT, W_PHONE = range(10, 13)
 CHARGE_PACKAGES = [(50, 500), (100, 1000), (300, 3000), (500, 5000), (1000, 10000)]
@@ -57,7 +57,7 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 
 @app.route('/')
 def index():
-    return jsonify({'service': 'Sudoku Game & Bot', 'status': 'online'})
+    return jsonify({'service': 'Sudoku Game & Bot', 'status': 'online', 'python_env': 'stable'})
 
 @app.route('/play')
 def play():
@@ -80,17 +80,6 @@ def play():
     except Exception as e:
         logger.error(f"Error in play: {e}")
         return "Internal Error", 500
-
-@app.route('/get_hint', methods=['POST'])
-def get_hint():
-    data = request.get_json()
-    user = db.get_user_by_telegram_id(int(data.get('tg_id')))
-    if user and user['points'] >= HINT_COST:
-        game = db.get_game(data.get('game_id'))
-        hint = generator.get_hint(game['puzzle'], game['solution'])
-        if hint and db.deduct_points(user['id'], HINT_COST):
-            return jsonify({'success': True, 'hint': hint, 'new_points': user['points'] - HINT_COST})
-    return jsonify({'success': False, 'error': 'رصيد غير كافٍ'})
 
 @app.route('/check_solution', methods=['POST'])
 def check_solution():
@@ -123,29 +112,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user_by_telegram_id(user.id)
     
     if not user_data.get('agreed_terms'):
-        text = "🎮 **تحدي السودوكو**\n\nأهلاً بك! يرجى الموافقة على الشروط للبدء."
+        text = "🎮 **تحدي السودوكو**\nأهلاً بك! يرجى الموافقة على الشروط للبدء."
         kb = [[InlineKeyboardButton("✅ موافق", callback_data='terms_accept')],
               [InlineKeyboardButton("❌ رفض", callback_data='terms_reject')]]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     else:
         await show_main_menu(update)
 
-# --- نظام الشحن (Conversation) ---
+# --- نظام الشحن ---
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     kb = [[InlineKeyboardButton(f"📦 {syp}ل.س ({pts}ن)", callback_data=f"cp_{syp}_{pts}")] for syp, pts in CHARGE_PACKAGES]
     kb.append([InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')])
-    await update.callback_query.edit_message_text("💳 اختر باقة الشحن:", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("💳 اختر باقة الشحن:", reply_markup=InlineKeyboardMarkup(kb))
     return C_PKG
 
 async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['c_pkg'] = update.callback_query.data
+    query = update.callback_query
+    await query.answer()
+    context.user_data['c_pkg'] = query.data
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل كاش", callback_data='cm_Syriatel')], [InlineKeyboardButton("🟡 MTN كاش", callback_data='cm_MTN')]]
-    await update.callback_query.edit_message_text("🏦 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("🏦 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(kb))
     return C_METH
 
 async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['c_meth'] = update.callback_query.data.split('_')[1]
-    await update.callback_query.edit_message_text("📱 أرسل رقم الهاتف الذي حولت منه:")
+    query = update.callback_query
+    await query.answer()
+    context.user_data['c_meth'] = query.data.split('_')[1]
+    await query.edit_message_text("📱 أرسل رقم الهاتف الذي حولت منه:")
     return C_PHONE
 
 async def charge_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,7 +149,8 @@ async def charge_phone_received(update: Update, context: ContextTypes.DEFAULT_TY
     return C_TRANS
 
 async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tid, pkg = update.message.text, context.user_data['c_pkg'].split('_')
+    tid = update.message.text
+    pkg = context.user_data['c_pkg'].split('_')
     user = db.get_user_by_telegram_id(update.effective_user.id)
     rid = db.create_charge_request(user['id'], int(pkg[1]), int(pkg[2]), context.user_data['c_meth'], context.user_data['c_phone'], tid)
     
@@ -163,81 +159,41 @@ async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("✅ تم استلام طلبك!")
     return ConversationHandler.END
 
-# --- نظام السحب (Conversation) ---
-async def start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton(f"💰 {syp} ل.س ({syp*100}ن)", callback_data=f"wa_{syp}_{syp*100}")] for syp in WITHDRAW_PACKAGES]
-    kb.append([InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')])
-    await update.callback_query.edit_message_text("💰 اختر المبلغ للسحب:", reply_markup=InlineKeyboardMarkup(kb))
-    return W_AMT
-
-async def withdraw_amt_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _, syp, pts = update.callback_query.data.split('_')
-    context.user_data.update({'w_syp': int(syp), 'w_pts': int(pts)})
-    await update.callback_query.edit_message_text("📱 أرسل رقم الهاتف لاستلام المبلغ:")
-    return W_PHONE
-
-async def withdraw_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone, pkg = update.message.text, context.user_data
-    user = db.get_user_by_telegram_id(update.effective_user.id)
-    if user['points'] < pkg['w_pts']:
-        await update.message.reply_text("❌ رصيدك غير كافٍ!")
-        return ConversationHandler.END
-    
-    db.deduct_points(user['id'], pkg['w_pts'])
-    rid = db.create_withdrawal_request(user['id'], pkg['w_pts'], pkg['w_syp'], pkg['w_syp']*0.9, "Cash", phone)
-    admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appw_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejw_{rid}")]]
-    await context.bot.send_message(ADMIN_ID, f"💸 طلب سحب #{rid}\n👤 {update.effective_user.first_name}\n💰 {pkg['w_syp']}ل.س\n📱 {phone}", reply_markup=InlineKeyboardMarkup(admin_kb))
-    await update.message.reply_text("✅ تم استلام طلب السحب!")
-    return ConversationHandler.END
-
-# --- الإدارة والخدمات ---
-async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = update.callback_query.data
-    action, rid = data[:4], int(data[5:])
-    if action == "appc":
-        db.update_charge_status(rid, 'approved', update.callback_query.from_user.id)
-        info = db.get_charge_request_details(rid)
-        await context.bot.send_message(info['telegram_id'], f"🎉 تم قبول شحن {info['points']} نقطة!")
-    elif action == "rejc":
-        db.update_charge_status(rid, 'rejected', update.callback_query.from_user.id)
-        info = db.get_charge_request_details(rid)
-        await context.bot.send_message(info['telegram_id'], "❌ يرجى التأكد من رقم العملية.")
-    await update.callback_query.edit_message_text(f"✅ تم تنفيذ الإجراء على الطلب #{rid}")
-
+# --- تشغيل البوت ---
 def run_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
+    # بناء التطبيق مع تلافي أخطاء الإصدارات الحديثة
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # المعالجات
+    # إعداد نظام الشحن
     charge_h = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
-        states={C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')], C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')], C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_received)], C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_received)]},
+        states={
+            C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
+            C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')],
+            C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_received)],
+            C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_received)]
+        },
         fallbacks=[CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$')]
     )
     
-    withdraw_h = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
-        states={W_AMT: [CallbackQueryHandler(withdraw_amt_selected, pattern='^wa_')], W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_received)]},
-        fallbacks=[CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$')]
-    )
-
     application.add_handler(charge_h)
-    application.add_handler(withdraw_h)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(lambda u,c: db.update_terms(u.effective_user.id, 1) or show_main_menu(u, True), pattern='^terms_accept$'))
     application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$'))
-    application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^choose_level$')) # للتصحيح
-    application.add_handler(CallbackQueryHandler(handle_admin, pattern='^(appc|rejc|appw|rejw)_'))
+    application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^choose_level$'))
     
+    logger.info("🤖 البوت بدأ العمل في خيط خلفي...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
-# تشغيل البوت في خيط خلفي
 def start_services():
-    if not any(t.name == "BotThread" for t in threading.enumerate()):
+    if not any(thread.name == "BotThread" for thread in threading.enumerate()):
         threading.Thread(target=run_bot, name="BotThread", daemon=True).start()
 
 start_services()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
