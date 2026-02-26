@@ -39,7 +39,7 @@ limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 db = Database()
 generator = SudokuGenerator()
 
-# الثوابت المعتمدة بناءً على متطلبات المشروع
+# الثوابت المعتمدة بناءً على me.txt
 REWARDS = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
 GAME_COST = 100
 HINT_COST = 50
@@ -48,15 +48,14 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GAME_URL = os.environ.get('GAME_URL')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 
-# حالات المحادثة لنظام الشحن والسحب
+# حالات المحادثة
 C_PKG, C_METH, C_PHONE, C_TRANS = range(4)
 W_AMT, W_PHONE = range(10, 12)
 
-# الباقات بناءً على me.txt
 CHARGE_PACKAGES = [(50, 500), (100, 1000), (300, 3000), (500, 5000), (1000, 10000)]
 WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 
-# --- مسارات Flask (الموقع الإلكتروني) ---
+# --- مسارات Flask (الموقع) ---
 
 @app.route('/')
 def index():
@@ -86,23 +85,21 @@ def check_solution():
     if SudokuGenerator.check_solution(board):
         game = db.get_game(data.get('game_id'))
         reward = REWARDS.get(game['difficulty'], 500)
-        db.add_points(game['user_id'], reward, f"فوز بمستوى {game['difficulty']}")
+        db.add_points(game['user_id'], reward, f"Won {game['difficulty']} game")
         db.complete_game(data.get('game_id'), 'won')
         return jsonify({'success': True, 'reward': reward, 'message': 'حل صحيح! 🎉', 'reset_timer': True})
     return jsonify({'success': False, 'message': 'الحل غير صحيح، حاول مجدداً', 'reset_timer': True})
 
-# --- وظائف البوت المساعدة ---
+# --- وظائف البوت ---
 
 async def safe_edit_message(update: Update, text: str, reply_markup: InlineKeyboardMarkup = None):
-    """تعديل الرسالة بأمان لتجنب أخطاء تكرار المحتوى"""
     try:
         if update.callback_query:
             await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
         else:
             await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     except BadRequest as e:
-        if "Message is not modified" not in str(e):
-            logger.error(f"Telegram error: {e}")
+        if "Message is not modified" not in str(e): raise e
 
 async def show_main_menu(update, is_query=False):
     uid = update.effective_user.id if not is_query else update.callback_query.from_user.id
@@ -120,23 +117,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.create_user(user.id, user.username or user.first_name, user.first_name)
     user_data = db.get_user_by_telegram_id(user.id)
     if not user_data.get('agreed_terms'):
-        text = "🎮 **أهلاً بك في تحدي السودوكو!**\n\nنظام النقاط:\nسهل: +500 | متوسط: +1000 | صعب: +1500 | خبير: +5000\n\n✅ هل توافق على الشروط؟"
+        text = "🧩 **مرحباً بك في تحدي السودوكو!**\n\nنظام النقاط:\nسهل: +500 | متوسط: +1000 | صعب: +1500 | خبير: +5000\n\n✅ هل توافق على الشروط؟"
         kb = [[InlineKeyboardButton("✅ موافق", callback_data='terms_accept')], [InlineKeyboardButton("❌ رفض", callback_data='terms_reject')]]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else:
-        await show_main_menu(update)
+    else: await show_main_menu(update)
 
 # --- نظام الشحن والسحب (Conversation) ---
 
 async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tid = update.message.text
-    pkg_data = context.user_data['c_pkg'].split('_')
+    pkg = context.user_data['c_pkg'].split('_')
     user = db.get_user_by_telegram_id(update.effective_user.id)
-    rid = db.create_charge_request(user['id'], int(pkg_data[1]), int(pkg_data[2]), context.user_data['c_meth'], context.user_data['c_phone'], tid)
-    
+    rid = db.create_charge_request(user['id'], int(pkg[1]), int(pkg[2]), context.user_data['c_meth'], context.user_data['c_phone'], tid)
     admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appc_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejc_{rid}")]]
-    await context.bot.send_message(ADMIN_ID, f"🔔 **طلب شحن جديد #{rid}**\n👤 الاسم: {update.effective_user.first_name}\n🆔 المعرف: `{update.effective_user.id}`\n📦 الباقة: {pkg_data[1]}ل.س\n📱 الهاتف: {context.user_data['c_phone']}\n🔢 العملية: `{tid}`", reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown')
-    await update.message.reply_text("✅ **تم استلام طلب الشحن!** سيتم التحقق وتحديث رصيدك.")
+    await context.bot.send_message(ADMIN_ID, f"🔔 **طلب شحن جديد #{rid}**\n👤 الاسم: {update.effective_user.first_name}\n🆔 المعرف: `{update.effective_user.id}`\n📦 الباقة: {pkg[1]}ل.س\n📱 الهاتف: {context.user_data['c_phone']}\n🔢 العملية: `{tid}`", reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown')
+    await update.message.reply_text("✅ تم استلام طلبك! سيتم الإشعار عند المعالجة.")
     return ConversationHandler.END
 
 async def withdraw_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,41 +141,23 @@ async def withdraw_phone_received(update: Update, context: ContextTypes.DEFAULT_
     if user['points'] < int(data['w_pts']):
         await update.message.reply_text("❌ رصيدك غير كافٍ!")
         return ConversationHandler.END
-    
     db.deduct_points(user['id'], int(data['w_pts']))
     rid = db.create_withdrawal_request(user['id'], int(data['w_pts']), int(data['w_syp']), int(data['w_syp']), "Cash", phone)
-    
     admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appw_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejw_{rid}")]]
     await context.bot.send_message(ADMIN_ID, f"💸 **طلب سحب جديد #{rid}**\n👤 الاسم: {update.effective_user.first_name}\n🆔 المعرف: `{update.effective_user.id}`\n💰 المبلغ: {data['w_syp']}ل.س\n📱 هاتف المستلم: {phone}", reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown')
-    await update.message.reply_text("✅ **تم إرسال طلب السحب للأدمن!** سيتم التحويل قريباً.")
+    await update.message.reply_text("✅ تم إرسال طلب السحب للأدمن!")
     return ConversationHandler.END
 
-# --- الإدارة والخدمات ---
-
-async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    action, rid = query.data[:4], int(query.data[5:])
-    await query.answer()
-    if action == "appc":
-        db.update_charge_status(rid, 'approved', query.from_user.id)
-        info = db.get_charge_request_details(rid)
-        await context.bot.send_message(info['telegram_id'], f"🎉 **تم قبول شحن {info['points']} نقطة!**")
-    elif action == "rejc":
-        db.update_charge_status(rid, 'rejected', query.from_user.id)
-        info = db.get_charge_request_details(rid)
-        await context.bot.send_message(info['telegram_id'], "❌ **تم رفض الشحن.** يرجى التأكد من رقم العملية.")
-    await query.edit_message_text(f"✅ تم تنفيذ الإجراء على الطلب #{rid}")
-
-# --- تشغيل البوت ---
+# --- تشغيل البوت و Flask ---
 def run_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     application = Application.builder().token(BOT_TOKEN).build()
     
     charge_h = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: safe_edit_message(u, "💳 اختر باقة الشحن:", InlineKeyboardMarkup([[InlineKeyboardButton(f"📦 {syp}ل.س ({pts}ن)", callback_data=f"cp_{syp}_{pts}")] for syp, pts in CHARGE_PACKAGES] + [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or C_PKG, pattern='^start_charge$')],
+        entry_points=[CallbackQueryHandler(lambda u,c: safe_edit_message(u, "💳 اختر باقة الشحن:", InlineKeyboardMarkup([[InlineKeyboardButton(f"📦 {s}ل.س ({p}ن)", callback_data=f"cp_{s}_{p}")] for s, p in CHARGE_PACKAGES] + [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or C_PKG, pattern='^start_charge$')],
         states={
-            C_PKG: [CallbackQueryHandler(lambda u,c: setattr(c,'user_data',{'c_pkg':u.callback_query.data}) or safe_edit_message(u, "🏦 اختر طريقة الدفع:", InlineKeyboardMarkup([[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')],[InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or C_METH, pattern='^cp_')],
+            C_PKG: [CallbackQueryHandler(lambda u,c: setattr(c,'user_data',{'c_pkg':u.callback_query.data}) or safe_edit_message(u, "🏦 اختر الطريقة:", InlineKeyboardMarkup([[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')],[InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')]])) or C_METH, pattern='^cp_')],
             C_METH: [CallbackQueryHandler(lambda u,c: setattr(c,'user_data',{**c.user_data,'c_meth':u.callback_query.data.split('_')[1]}) or safe_edit_message(u, "📱 أرسل رقم الهاتف المحول منه:") or C_PHONE, pattern='^cm_')],
             C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u,c: setattr(c,'user_data',{**c.user_data,'c_phone':u.message.text}) or u.message.reply_text("🔢 أرسل رقم العملية:") or C_TRANS)],
             C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_received)]
@@ -188,33 +165,14 @@ def run_bot():
         fallbacks=[CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$')]
     )
 
-    withdraw_h = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: safe_edit_message(u, "💰 اختر مبلغ السحب:", InlineKeyboardMarkup([[InlineKeyboardButton(f"💰 {syp} ل.س ({syp*10}ن)", callback_data=f"wa_{syp}_{syp*10}")] for syp in WITHDRAW_PACKAGES] + [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or W_AMT, pattern='^start_withdraw$')],
-        states={
-            W_AMT: [CallbackQueryHandler(lambda u,c: setattr(c,'user_data',{'w_syp':u.callback_query.data.split('_')[1], 'w_pts':u.callback_query.data.split('_')[2]}) or safe_edit_message(u, "📱 أرسل رقم الهاتف لاستلام المبلغ:") or W_PHONE, pattern='^wa_')],
-            W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_received)]
-        },
-        fallbacks=[CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$')]
-    )
-
     application.add_handler(charge_h)
-    application.add_handler(withdraw_h)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(lambda u,c: db.update_terms(u.effective_user.id, 1) or show_main_menu(u, True), pattern='^terms_accept$'))
     application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(lambda u,c: safe_edit_message(u, "🎯 اختر مستوى الصعوبة:", InlineKeyboardMarkup([[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=medium")],[InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=hard")],[InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=expert")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])), pattern='^choose_level$'))
-    application.add_handler(CallbackQueryHandler(handle_admin, pattern='^(appc|rejc|appw|rejw)_'))
-    application.add_handler(CallbackQueryHandler(lambda u,c: safe_edit_message(u, f"👤 **حسابي**\n🆔 `{u.effective_user.id}`\n💰 رصيدك: {db.get_user_by_telegram_id(u.effective_user.id)['points']} نقطة\n💵 ما يعادله: {db.get_user_by_telegram_id(u.effective_user.id)['points']*10:,} ل.س", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])), pattern='^profile$'))
-    application.add_handler(CallbackQueryHandler(lambda u,c: safe_edit_message(u, "📜 **سجل العمليات:**\n" + ("\n".join([f"• {h['type']} | {h['amount']} | {h['status']}" for h in db.get_user_history(db.get_user_by_telegram_id(u.effective_user.id)['id'], limit=5)]) or "لا يوجد عمليات."), InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])), pattern='^history$'))
-
-    # معالجة Conflict: الانتظار قليلاً قبل البدء
-    try:
-        application.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
-    except Conflict:
-        logger.warning("Conflict detected! Waiting for old instance to close...")
-        import time
-        time.sleep(5)
-        application.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
+    
+    logger.info("🤖 البوت بدأ العمل...")
+    application.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
 
 threading.Thread(target=run_bot, name="BotThread", daemon=True).start()
 
