@@ -38,7 +38,7 @@ limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 db = Database()
 generator = SudokuGenerator()
 
-# الثوابت والقيم المعتمدة بناءً على متطلبات المشروع
+# الثوابت
 REWARDS = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
 GAME_COST = 100
 HINT_COST = 50
@@ -53,7 +53,7 @@ W_METH, W_AMT, W_PHONE = range(10, 13)
 CHARGE_PACKAGES = [(50, 500), (100, 1000), (300, 3000), (500, 5000), (1000, 10000)]
 WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 
-# --- مسارات Flask (الموقع الإلكتروني) ---
+# --- مسارات Flask ---
 
 @app.route('/')
 def index():
@@ -65,11 +65,9 @@ def play():
         tg_id = request.args.get('user')
         difficulty = request.args.get('difficulty', 'medium')
         if not tg_id or not tg_id.isdigit(): return "معرف غير صالح", 400
-        
         user = db.get_user_by_telegram_id(int(tg_id))
         if not user or user['points'] < GAME_COST:
             return render_template('no_points.html', points=user['points'] if user else 0, needed=GAME_COST-(user['points'] if user else 0))
-
         if db.deduct_points(user['id'], GAME_COST):
             puzzle, solution = generator.generate_puzzle(difficulty)
             game_id = db.save_game(user['id'], difficulty, puzzle, solution)
@@ -93,7 +91,7 @@ def check_solution():
         return jsonify({'success': True, 'reward': reward, 'message': 'حل صحيح! 🎉', 'reset_timer': True})
     return jsonify({'success': False, 'message': 'الحل غير صحيح، حاول مجدداً', 'reset_timer': True})
 
-# --- وظائف البوت (Telegram Bot) ---
+# --- وظائف البوت ---
 
 async def show_main_menu(update, is_query=False):
     uid = update.effective_user.id if not is_query else update.callback_query.from_user.id
@@ -102,7 +100,6 @@ async def show_main_menu(update, is_query=False):
     kb = [[InlineKeyboardButton("🎯 ابدأ اللعب", callback_data='choose_level')],
           [InlineKeyboardButton("💳 شحن", callback_data='start_charge'), InlineKeyboardButton("💰 سحب", callback_data='start_withdraw')],
           [InlineKeyboardButton("👤 حسابي", callback_data='profile'), InlineKeyboardButton("📜 السجل", callback_data='history')]]
-    
     if is_query: await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
@@ -110,37 +107,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.create_user(user.id, user.username or user.first_name, user.first_name)
     user_data = db.get_user_by_telegram_id(user.id)
-    
     if not user_data.get('agreed_terms'):
         text = "🎮 **تحدي السودوكو**\nأهلاً بك! يرجى الموافقة على الشروط للبدء."
-        kb = [[InlineKeyboardButton("✅ موافق", callback_data='terms_accept')],
-              [InlineKeyboardButton("❌ رفض", callback_data='terms_reject')]]
+        kb = [[InlineKeyboardButton("✅ موافق", callback_data='terms_accept')], [InlineKeyboardButton("❌ رفض", callback_data='terms_reject')]]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else:
-        await show_main_menu(update)
+    else: await show_main_menu(update)
 
-# --- نظام الشحن ---
+# --- نظام الشحن (Conversation) ---
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
     kb = [[InlineKeyboardButton(f"📦 {syp}ل.س ({pts}ن)", callback_data=f"cp_{syp}_{pts}")] for syp, pts in CHARGE_PACKAGES]
     kb.append([InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')])
-    await query.edit_message_text("💳 اختر باقة الشحن:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.callback_query.edit_message_text("💳 اختر باقة الشحن:", reply_markup=InlineKeyboardMarkup(kb))
     return C_PKG
 
 async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data['c_pkg'] = query.data
+    context.user_data['c_pkg'] = update.callback_query.data
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل كاش", callback_data='cm_Syriatel')], [InlineKeyboardButton("🟡 MTN كاش", callback_data='cm_MTN')]]
-    await query.edit_message_text("🏦 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.callback_query.edit_message_text("🏦 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(kb))
     return C_METH
 
 async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data['c_meth'] = query.data.split('_')[1]
-    await query.edit_message_text("📱 أرسل رقم الهاتف الذي حولت منه:")
+    context.user_data['c_meth'] = update.callback_query.data.split('_')[1]
+    await update.callback_query.edit_message_text("📱 أرسل رقم الهاتف الذي حولت منه:")
     return C_PHONE
 
 async def charge_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,7 +141,6 @@ async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TY
     pkg = context.user_data['c_pkg'].split('_')
     user = db.get_user_by_telegram_id(update.effective_user.id)
     rid = db.create_charge_request(user['id'], int(pkg[1]), int(pkg[2]), context.user_data['c_meth'], context.user_data['c_phone'], tid)
-    
     admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appc_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejc_{rid}")]]
     await context.bot.send_message(ADMIN_ID, f"🔔 طلب شحن #{rid}\n👤 {update.effective_user.first_name}\n📦 {pkg[1]}ل.س\n🔢 {tid}", reply_markup=InlineKeyboardMarkup(admin_kb))
     await update.message.reply_text("✅ تم استلام طلبك!")
@@ -161,13 +148,14 @@ async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TY
 
 # --- تشغيل البوت ---
 def run_bot():
+    """تشغيل البوت في خيط خلفي مع تعطيل إشارات النظام"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # بناء التطبيق مع تلافي أخطاء الإصدارات الحديثة
+    # بناء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # إعداد نظام الشحن
+    # المعالجات
     charge_h = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
         states={
@@ -184,9 +172,12 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(lambda u,c: db.update_terms(u.effective_user.id, 1) or show_main_menu(u, True), pattern='^terms_accept$'))
     application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^choose_level$'))
+    application.add_handler(CallbackQueryHandler(lambda u,c: show_main_menu(u, True), pattern='^profile$'))
     
     logger.info("🤖 البوت بدأ العمل في خيط خلفي...")
-    application.run_polling(drop_pending_updates=True, close_loop=False)
+    
+    # ✅ السطر الحاسر: تعطيل stop_signals للسماح بالعمل داخل Thread
+    application.run_polling(drop_pending_updates=True, close_loop=False, stop_signals=None)
 
 def start_services():
     if not any(thread.name == "BotThread" for thread in threading.enumerate()):
@@ -195,5 +186,4 @@ def start_services():
 start_services()
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
