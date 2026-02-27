@@ -84,25 +84,38 @@ def play():
     try:
         tg_id = request.args.get('user')
         difficulty = request.args.get('difficulty', 'medium')
+        
+        if not tg_id:
+            return "❌ معرف مستخدم مفقود", 400
+
         user = db.get_user_by_telegram_id(int(tg_id))
         
-        if user and db.deduct_points(user['id'], 100):
+        if not user:
+            return "❌ سجل عبر البوت أولاً", 404
+
+        # التأكد من الرصيد قبل الخصم
+        if user['points'] < 100:
+            return render_template('no_points.html', points=user['points'])
+
+        if db.deduct_points(user['id'], 100):
             puzzle, solution = generator.generate_puzzle(difficulty)
             game_id = db.save_game(user['id'], difficulty, puzzle, solution)
             
+            # ✅ التعديل: إرسال المتغيرات بالأسماء التي يتوقعها قالب game.html
             return render_template('game.html', 
-                                 puzzle_json=json.dumps(puzzle), 
-                                 solution_json=json.dumps(solution),
+                                 puzzle=puzzle,  # نرسل المصفوفة مباشرة كما هي
+                                 solution=solution,
                                  game_id=game_id, 
                                  tg_id=tg_id, 
                                  difficulty=difficulty, 
                                  user_points=user['points'] - 100,
                                  hint_cost=50)
+        else:
+            return "❌ خطأ في تحديث الرصيد", 500
+            
     except Exception as e:
         logger.error(f"Play error: {e}")
-        return "Internal Error", 500
-
-@app.route('/get_hint', methods=['POST'])
+        return f"Internal Error: {str(e)}", 500
 def get_hint():
     try:
         data = request.get_json()
@@ -376,3 +389,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
