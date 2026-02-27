@@ -38,7 +38,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 # في ملف app.py تأكد من تعديل هذا السطر قبل الرفع:
 Talisman(
     app,
-    force_https=False, # نغيرها لـ True عند الرفع
+    force_https=True, # نغيرها لـ True عند الرفع
     content_security_policy={
         'default-src': "'self'",
         'script-src': "'self' 'unsafe-inline'",
@@ -378,4 +378,5 @@ def run_bot():
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
+
     app.run(host='0.0.0.0', port=10000)
