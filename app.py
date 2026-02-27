@@ -83,7 +83,9 @@ import json
 def play():
     try:
         tg_id = request.args.get('user')
+        # التأكد من أن المستوى نص بسيط وليس بيانات معقدة
         difficulty = request.args.get('difficulty', 'medium')
+        if len(difficulty) > 10: difficulty = 'medium' # حماية من البيانات الخاطئة
         
         if not tg_id:
             return "❌ معرف مستخدم مفقود", 400
@@ -97,10 +99,10 @@ def play():
 
         if db.deduct_points(user['id'], 100):
             puzzle, solution = generator.generate_puzzle(difficulty)
-            # حفظ اللعبة في قاعدة البيانات
+            # حفظ اللعبة (تأكد من وجود الأعمدة الصحيحة في قاعدة البيانات)
             game_id = db.save_game(user['id'], json.dumps({'puzzle': puzzle, 'solution': solution}), difficulty)
             
-            # إرسال المتغيرات بالأسماء الصحيحة التي يتوقعها game.html
+            # ✅ إرسال البيانات بالأسماء الصحيحة التي يتوقعها game.html
             return render_template('game.html', 
                                  puzzle=puzzle, 
                                  solution=solution,
@@ -108,7 +110,8 @@ def play():
                                  user_id=user['id'],
                                  tg_id=tg_id, 
                                  difficulty=difficulty, 
-                                 user_points=user['points'] - 100)
+                                 user_points=user['points'] - 100,
+                                 puzzle_json=json.dumps(puzzle)) # لضمان عمل السكريبت
         return "❌ خطأ في الرصيد", 500
     except Exception as e:
         logger.error(f"Play error: {e}")
@@ -389,6 +392,3 @@ if os.environ.get('WERKZEUG_RUN_MAIN') != 'true': # يمنع التشغيل ال
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
-
-
-
