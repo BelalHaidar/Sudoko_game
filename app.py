@@ -339,12 +339,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- تشغيل البوت ---
 
 def run_bot():
+    time.sleep(2)
     while True:
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
-
+            app_tg = ApplicationBuilder().token(BOT_TOKEN).connect_timeout(30).read_timeout(30).build()
             charge_h = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
                 states={
@@ -377,14 +377,18 @@ def run_bot():
             app_tg.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text(f"👤 **حسابي**\n🆔 `{u.effective_user.id}`\n💰 رصيدك: {db.get_user_by_telegram_id(u.effective_user.id)['points']}ن", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown'), pattern='^profile$'))
 
             app_tg.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
-        except Conflict: time.sleep(15)
+        except Conflict:
+            logger.warning("Conflict detected, retrying in 20s...")
+            time.sleep(20)
         except Exception as e:
             logger.error(f"Bot crash: {e}")
-            time.sleep(5)
+            time.sleep(10)
 
-threading.Thread(target=run_bot, daemon=True).start()
+if os.environ.get('WERKZEUG_RUN_MAIN') != 'true': # يمنع التشغيل المزدوج في بيئة التطوير
+    threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
 
 
