@@ -28,7 +28,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
 # تأمين الرابط لـ Render (تفعيل HTTPS)
-Talisman(app, force_https=True, content_security_policy=None)
+Talisman(app, force_https=False, content_security_policy=None)
 limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 
 # ربط قاعدة البيانات والمولد
@@ -216,7 +216,27 @@ bot_app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.edit_mess
 async def setup_webhook():
     await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
 
+# استبدل الجزء الأخير من ملف app.py بهذا الكود:
+
+@app.before_request
+def init_webhook():
+    # التأكد من ضبط الويب هوك مرة واحدة فقط عند بدء التشغيل
+    if not hasattr(app, 'webhook_initialized'):
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}"))
+            app.webhook_initialized = True
+            logger.info(f"Webhook set successfully to {GAME_URL}")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
+
+# مسار أساسي للتأكد من عمل السيرفر (Health Check)
+@app.route('/')
+def home():
+    return "Sudoku Bot is Running!", 200
+
 if __name__ == '__main__':
-    asyncio.run(setup_webhook())
+    # هذا السطر يعمل فقط عند التشغيل المحلي
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
