@@ -14,10 +14,7 @@ from dotenv import load_dotenv
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
-    ContextTypes, MessageHandler, filters, ConversationHandler
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 from telegram.error import BadRequest, Conflict
 
 # استيراد المكونات المحلية
@@ -38,7 +35,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 # في ملف app.py تأكد من تعديل هذا السطر قبل الرفع:
 Talisman(
     app,
-    force_https=True, # نغيرها لـ True عند الرفع
+    force_https=False, # نغيرها لـ True عند الرفع
     content_security_policy={
         'default-src': "'self'",
         'script-src': "'self' 'unsafe-inline'",
@@ -209,7 +206,7 @@ async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     method = query.data.split('_')[1]
     context.user_data['c_meth'] = method
-    instr = "✅ **سيرياتيل:**\:\nحوّل إلى أحد الأرقام التالية بطريقة التحويل اليدوي حصراً **\n `49725859`**\n `22866918`" if method == 'Syriatel' else "✅ **MTN:**\nحوّل إلى أحد الأرقام التالية بطريقة التحويل اليدوي حصراً **\n `8598040534523762`**\n `8428121421124329`"
+    instr = "✅ **سيرياتيل:**:\nحوّل إلى أحد الأرقام التالية بطريقة التحويل اليدوي حصراً **\n `49725859`**\n `22866918`" if method == 'Syriatel' else "✅ **MTN:**\nحوّل إلى أحد الأرقام التالية بطريقة التحويل اليدوي حصراً **\n `8598040534523762`**\n `8428121421124329`"
     await query.edit_message_text(f"{instr}\n\n📱 **أرسل رقم الهاتف** الذي حوّلت منه:", parse_mode='Markdown')
     return C_PHONE
 
@@ -336,7 +333,7 @@ def run_bot():
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            app_tg = Application.builder().token(BOT_TOKEN).build()
+            app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
 
             charge_h = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
@@ -378,5 +375,4 @@ def run_bot():
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
-
     app.run(host='0.0.0.0', port=10000)
