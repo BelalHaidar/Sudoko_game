@@ -28,15 +28,15 @@ load_dotenv()
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- إعدادات Flask ---
+# --- إعدادات تطبيق Flask ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 app = Flask(__name__, template_folder=BASE_DIR)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '46815f999dedfe11163165db67aa86d645fb9b4ed4fcd45d9358e6b019cc5165')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
 Talisman(app, force_https=True, frame_options='DENY')
 limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 
-# تهيئة قاعدة البيانات
+# تهيئة قاعدة البيانات بالمسار المطلق
 db_path = os.environ.get('DATABASE_PATH', os.path.join(BASE_DIR, 'sudoku.db'))
 db = Database(db_path=db_path)
 generator = SudokuGenerator()
@@ -60,7 +60,7 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 
 @app.route('/')
 def index():
-    return jsonify({'service': 'Sudoku Game & Bot', 'status': 'online'})
+    return jsonify({'service': 'Sudoku Game & Bot', 'status': 'online', 'timestamp': datetime.now().isoformat()})
 
 @app.route('/play')
 def play():
@@ -76,15 +76,7 @@ def play():
         if db.deduct_points(user['id'], GAME_COST):
             puzzle, solution = generator.generate_puzzle(difficulty)
             game_id = db.save_game(user['id'], difficulty, puzzle, solution)
-            
-            # ✅ تمرير البيانات كـ JSON آمن للمتصفح لضمان ظهور الأرقام
-            return render_template('game.html', 
-                                 puzzle_json=json.dumps(puzzle), 
-                                 solution_json=json.dumps(solution), 
-                                 game_id=game_id, tg_id=tg_id, 
-                                 difficulty=difficulty, 
-                                 user_points=user['points'] - GAME_COST, 
-                                 hint_cost=HINT_COST)
+            return render_template('game.html', puzzle_json=json.dumps(puzzle), solution_json=json.dumps(solution), game_id=game_id, tg_id=tg_id, difficulty=difficulty, user_points=user['points'] - GAME_COST, hint_cost=HINT_COST)
     except Exception as e:
         logger.error(f"Play error: {e}")
         return "Internal Error", 500
@@ -103,8 +95,8 @@ def check_solution():
 # --- وظائف البوت ---
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = db.get_user_by_telegram_id(user_id)
+    uid = update.effective_user.id
+    user = db.get_user_by_telegram_id(uid)
     text = f"🧩 **القائمة الرئيسية**\n💰 رصيدك: {user['points']} نقطة"
     kb = [
         [InlineKeyboardButton("🎯 ابدأ اللعب", callback_data='choose_level')],
@@ -116,67 +108,82 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-# --- نظام الشحن (Conversation) ---
-
-async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton(f"📦 {s}ل.س ({p}ن)", callback_data=f"cp_{s}_{p}")] for s, p in CHARGE_PACKAGES]
-    kb.append([InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')])
-    await update.callback_query.edit_message_text("💳 اختر باقة الشحن:", reply_markup=InlineKeyboardMarkup(kb))
-    return C_PKG
-
-async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['c_pkg'] = update.callback_query.data
-    kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل كاش", callback_data='cm_Syriatel')], [InlineKeyboardButton("🟡 MTN كاش", callback_data='cm_MTN')]]
-    await update.callback_query.edit_message_text("🏦 اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(kb))
-    return C_METH
+# --- نظام الشحن والسحب (Conversation) ---
 
 async def charge_trans_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tid = update.message.text
-    pkg = context.user_data.get('c_pkg', '').split('_')
+    pkg_data = context.user_data.get('c_pkg', '').split('_')
     user = db.get_user_by_telegram_id(update.effective_user.id)
-    rid = db.create_charge_request(user['id'], int(pkg[1]), int(pkg[2]), context.user_data.get('c_meth'), context.user_data.get('c_phone'), tid)
+    rid = db.create_charge_request(user['id'], int(pkg_data[1]), int(pkg_data[2]), context.user_data.get('c_meth'), context.user_data.get('c_phone'), tid)
     
-    admin_msg = f"🔔 **شحن جديد #{rid}**\n👤 {update.effective_user.first_name}\n🆔 `{update.effective_user.id}`\n📦 {pkg[1]}ل.س\n📱 {context.user_data.get('c_phone')}\n🔢 `{tid}`"
+    admin_msg = f"🔔 **شحن جديد #{rid}**\n👤 {update.effective_user.first_name}\n🆔 `{update.effective_user.id}`\n📦 {pkg_data[1]}ل.س\n📱 {context.user_data.get('c_phone')}\n🔢 `{tid}`"
     admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appc_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejc_{rid}")]]
     await context.bot.send_message(ADMIN_ID, admin_msg, reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown')
-    await update.message.reply_text("✅ تم استلام طلبك! سيتم تحديث رصيدك بعد التحقق.")
+    await update.message.reply_text("✅ تم استلام طلبك! سيتم الإشعار بعد التحقق.")
     return ConversationHandler.END
 
-# --- تشغيل البوت في خيط خلفي ---
+async def withdraw_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text
+    ud = context.user_data
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if user['points'] < int(ud['w_pts']):
+        await update.message.reply_text("❌ رصيدك غير كافٍ!")
+        return ConversationHandler.END
+    db.deduct_points(user['id'], int(ud['w_pts']))
+    rid = db.create_withdrawal_request(user['id'], int(ud['w_pts']), int(ud['w_syp']), int(ud['w_syp']), "Cash", phone)
+    admin_msg = f"💸 **سحب جديد #{rid}**\n👤 {update.effective_user.first_name}\n🆔 `{update.effective_user.id}`\n💰 {ud['w_syp']}ل.س\n📱 {phone}"
+    admin_kb = [[InlineKeyboardButton("✅ تنفيذ", callback_data=f"appw_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejw_{rid}")]]
+    await context.bot.send_message(ADMIN_ID, admin_msg, reply_markup=InlineKeyboardMarkup(admin_kb), parse_mode='Markdown')
+    await update.message.reply_text("✅ تم إرسال طلب السحب!")
+    return ConversationHandler.END
+
+# --- تشغيل البوت في خيط خلفي مع معالجة الـ Conflict ---
 def run_bot_worker():
     while True:
         try:
-            # إنشاء حلقة أحداث جديدة لكل محاولة لتجنب Future Error
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
             application = Application.builder().token(BOT_TOKEN).build()
             
+            # معالج الشحن
             charge_h = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
+                entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text("💳 باقة الشحن:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"📦 {s}ل.س", callback_data=f"cp_{s}_{p}")] for s,p in CHARGE_PACKAGES] + [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or C_PKG, pattern='^start_charge$')],
                 states={
-                    C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
-                    C_METH: [CallbackQueryHandler(lambda u,c: c.user_data.update({'c_meth':u.callback_query.data.split('_')[1]}) or u.callback_query.edit_message_text("📱 أرسل رقم هاتف المحول منه:") or C_PHONE, pattern='^cm_')],
-                    C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u,c: c.user_data.update({'c_phone':u.message.text}) or u.message.reply_text("🔢 أرسل رقم العملية:") or C_TRANS)],
+                    C_PKG: [CallbackQueryHandler(lambda u,c: c.user_data.update({'c_pkg':u.callback_query.data}) or u.callback_query.edit_message_text("🏦 MTN أم سيرياتيل؟", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')],[InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')]])) or C_METH, pattern='^cp_')],
+                    C_METH: [CallbackQueryHandler(lambda u,c: c.user_data.update({'c_meth':u.callback_query.data.split('_')[1]}) or u.callback_query.edit_message_text("📱 هاتف المحول:") or C_PHONE, pattern='^cm_')],
+                    C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u,c: c.user_data.update({'c_phone':u.message.text}) or u.message.reply_text("🔢 رقم العملية:") or C_TRANS)],
                     C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_received)]
                 },
                 fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
             )
 
+            # معالج السحب
+            withdraw_h = ConversationHandler(
+                entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text("💰 مبلغ السحب:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"{s}ل.س", callback_data=f"wa_{s}_{s*10}")] for s in WITHDRAW_PACKAGES] + [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])) or W_AMT, pattern='^start_withdraw$')],
+                states={
+                    W_AMT: [CallbackQueryHandler(lambda u,c: c.user_data.update({'w_syp':u.callback_query.data.split('_')[1], 'w_pts':u.callback_query.data.split('_')[2]}) or u.callback_query.edit_message_text("📱 هاتف المستلم:") or W_PHONE, pattern='^wa_')],
+                    W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_received)]
+                },
+                fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
+            )
+
             application.add_handler(charge_h)
+            application.add_handler(withdraw_h)
             application.add_handler(CommandHandler("start", lambda u,c: db.create_user(u.effective_user.id, u.effective_user.username, u.effective_user.first_name) or asyncio.run_coroutine_threadsafe(show_main_menu(u, c), loop)))
-            application.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
             application.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text("🎯 اختر المستوى:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={u.effective_user.id}&difficulty=medium")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]])), pattern='^choose_level$'))
-            
-            logger.info("🤖 Bot worker initialized.")
+            application.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
+            application.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text(f"👤 **حسابي**\n🆔 `{u.effective_user.id}`\n💰 رصيدك: {db.get_user_by_telegram_id(u.effective_user.id)['points']}ن", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown'), pattern='^profile$'))
+
+            logger.info("🤖 Bot worker starting...")
             application.run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
         except Conflict:
-            logger.warning("Conflict! Waiting 15s...")
-            time.sleep(15)
+            logger.warning("Conflict! Waiting 20s to resolve...")
+            time.sleep(20)
         except Exception as e:
-            logger.error(f"Bot crash: {e}")
+            logger.error(f"Bot worker error: {e}")
             time.sleep(5)
 
+# إطلاق البوت
 threading.Thread(target=run_bot_worker, name="BotThread", daemon=True).start()
 
 if __name__ == '__main__':
