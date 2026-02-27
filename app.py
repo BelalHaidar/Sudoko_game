@@ -82,11 +82,10 @@ import json
 @app.route('/play')
 def play():
     try:
-        # استلام المعرفات
         tg_id_raw = request.args.get('user')
         difficulty = request.args.get('difficulty', 'medium')
         
-        # حماية: التأكد من أن الصعوبة نصية وليست مصفوفة (حل مشكلة Invalid difficulty)
+        # حماية: التأكد من أن المستوى نص بسيط وليس مصفوفة (حل مشكلة Invalid difficulty)
         if not difficulty or len(difficulty) > 10:
             difficulty = 'medium'
 
@@ -96,32 +95,29 @@ def play():
         tg_id = int(tg_id_raw)
         user = db.get_user_by_telegram_id(tg_id)
         
-        # حل مشكلة "سجل عبر البوت": إنشاء مستخدم تلقائي إذا لم يوجد
+        # إنشاء مستخدم تلقائي إذا لم يوجد (حل مشكلة سجل عبر البوت أولاً)
         if not user:
             db.create_user(tg_id, f"User_{tg_id}", "Player")
             user = db.get_user_by_telegram_id(tg_id)
 
-        # التحقق من الرصيد
         if user['points'] < 100:
             return render_template('no_points.html', points=user['points'])
 
-        # الخصم وبدء اللعبة
         if db.deduct_points(user['id'], 100):
             puzzle, solution = generator.generate_puzzle(difficulty)
+            # حفظ بيانات اللعبة بشكل صحيح في قاعدة البيانات
             game_id = db.save_game(user['id'], json.dumps({'puzzle': puzzle, 'solution': solution}), difficulty)
             
-            # ✅ التعديل الجوهري: إرسال puzzle_json ليتوافق مع السكريبت في game.html
+            # ✅ إرسال المتغيرات بالأسماء الدقيقة التي يطلبها قالب game.html
             return render_template('game.html', 
                                  puzzle=puzzle, 
-                                 puzzle_json=json.dumps(puzzle), # هذا ما يبحث عنه ملف game.html
+                                 puzzle_json=json.dumps(puzzle), # ضروري جداً للسكريبت
                                  game_id=game_id, 
                                  user_id=user['id'],
                                  tg_id=tg_id, 
                                  difficulty=difficulty, 
                                  user_points=user['points'] - 100)
-        
         return "❌ خطأ في تحديث الرصيد", 500
-            
     except Exception as e:
         logger.error(f"Play error: {e}")
         return f"Internal Error: {str(e)}", 500
@@ -401,3 +397,4 @@ if os.environ.get('WERKZEUG_RUN_MAIN') != 'true': # يمنع التشغيل ال
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
