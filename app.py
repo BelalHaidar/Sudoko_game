@@ -162,10 +162,18 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- مسارات Flask ---
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-async def telegram_webhook():
+def telegram_webhook(): # حذفنا كلمة async من هنا
     update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    await bot_app.initialize()
-    await bot_app.process_update(update)
+    
+    # تشغيل المعالجة داخل حلقة أحداث (Loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(bot_app.initialize())
+        loop.run_until_complete(bot_app.process_update(update))
+    finally:
+        loop.close()
+        
     return 'OK', 200
 
 @app.route('/play')
