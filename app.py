@@ -89,30 +89,27 @@ def play():
             return "❌ معرف مستخدم مفقود", 400
 
         user = db.get_user_by_telegram_id(int(tg_id))
-        
         if not user:
             return "❌ سجل عبر البوت أولاً", 404
 
-        # التأكد من الرصيد قبل الخصم
         if user['points'] < 100:
             return render_template('no_points.html', points=user['points'])
 
         if db.deduct_points(user['id'], 100):
             puzzle, solution = generator.generate_puzzle(difficulty)
-            game_id = db.save_game(user['id'], difficulty, puzzle, solution)
+            # حفظ اللعبة في قاعدة البيانات
+            game_id = db.save_game(user['id'], json.dumps({'puzzle': puzzle, 'solution': solution}), difficulty)
             
-            # ✅ التعديل: إرسال المتغيرات بالأسماء التي يتوقعها قالب game.html
+            # إرسال المتغيرات بالأسماء الصحيحة التي يتوقعها game.html
             return render_template('game.html', 
-                                 puzzle=puzzle,  # نرسل المصفوفة مباشرة كما هي
+                                 puzzle=puzzle, 
                                  solution=solution,
                                  game_id=game_id, 
+                                 user_id=user['id'],
                                  tg_id=tg_id, 
                                  difficulty=difficulty, 
-                                 user_points=user['points'] - 100,
-                                 hint_cost=50)
-        else:
-            return "❌ خطأ في تحديث الرصيد", 500
-            
+                                 user_points=user['points'] - 100)
+        return "❌ خطأ في الرصيد", 500
     except Exception as e:
         logger.error(f"Play error: {e}")
         return f"Internal Error: {str(e)}", 500
@@ -389,4 +386,5 @@ threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
 
