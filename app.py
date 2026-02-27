@@ -82,35 +82,44 @@ import json
 @app.route('/play')
 def play():
     try:
-        tg_id = request.args.get('user')
+        # استلام المعرفات
+        tg_id_raw = request.args.get('user')
         difficulty = request.args.get('difficulty', 'medium')
         
-        if not tg_id:
+        # حماية: التأكد من أن الصعوبة نصية وليست مصفوفة (حل مشكلة Invalid difficulty)
+        if not difficulty or len(difficulty) > 10:
+            difficulty = 'medium'
+
+        if not tg_id_raw:
             return "❌ معرف مستخدم مفقود", 400
 
-        user = db.get_user_by_telegram_id(int(tg_id))
+        tg_id = int(tg_id_raw)
+        user = db.get_user_by_telegram_id(tg_id)
         
-        # إذا لم يجد المستخدم، نقوم بإنشائه تلقائياً (حل مشكلة سجل عبر البوت أولاً)
+        # حل مشكلة "سجل عبر البوت": إنشاء مستخدم تلقائي إذا لم يوجد
         if not user:
-            db.create_user(int(tg_id), "Guest", "Guest")
-            user = db.get_user_by_telegram_id(int(tg_id))
+            db.create_user(tg_id, f"User_{tg_id}", "Player")
+            user = db.get_user_by_telegram_id(tg_id)
 
+        # التحقق من الرصيد
         if user['points'] < 100:
             return render_template('no_points.html', points=user['points'])
 
+        # الخصم وبدء اللعبة
         if db.deduct_points(user['id'], 100):
             puzzle, solution = generator.generate_puzzle(difficulty)
             game_id = db.save_game(user['id'], json.dumps({'puzzle': puzzle, 'solution': solution}), difficulty)
             
-            # ✅ التعديل الجوهري: إرسال puzzle_json ليتعرف عليه السكريبت في game.html
+            # ✅ التعديل الجوهري: إرسال puzzle_json ليتوافق مع السكريبت في game.html
             return render_template('game.html', 
                                  puzzle=puzzle, 
-                                 puzzle_json=json.dumps(puzzle), # ضروري جداً للسكريبت
+                                 puzzle_json=json.dumps(puzzle), # هذا ما يبحث عنه ملف game.html
                                  game_id=game_id, 
-                                 tg_id=tg_id, 
                                  user_id=user['id'],
+                                 tg_id=tg_id, 
                                  difficulty=difficulty, 
                                  user_points=user['points'] - 100)
+        
         return "❌ خطأ في تحديث الرصيد", 500
             
     except Exception as e:
