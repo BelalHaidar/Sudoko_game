@@ -8,6 +8,7 @@ from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
+from asgiref.sync import async_to_sync
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -162,19 +163,20 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- مسارات Flask ---
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def telegram_webhook(): # حذفنا كلمة async من هنا
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
+def telegram_webhook():
+    update_data = request.get_json(force=True)
+    update = Update.de_json(update_data, bot_app.bot)
     
-    # تشغيل المعالجة داخل حلقة أحداث (Loop)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(bot_app.initialize())
-        loop.run_until_complete(bot_app.process_update(update))
-    finally:
-        loop.close()
-        
+    # تحويل الدالة غير المتزامنة إلى متزامنة بشكل صحيح 
+    # هذا يمنع إغلاق الـ Event Loop قبل انتهاء معالجة الطلب
+    async_to_sync(process_update_task)(update)
+    
     return 'OK', 200
+
+async def process_update_task(update):
+    if not bot_app.running:
+        await bot_app.initialize()
+    await bot_app.process_update(update)
 
 @app.route('/play')
 def play():
