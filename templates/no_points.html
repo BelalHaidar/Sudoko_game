@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚠️ رصيد غير كافي</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+            background: linear-gradient(135deg, #2c3e50 0%, #1a1a2e 100%); 
+            color: #fff; 
+            padding: 20px; 
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        .card {
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 20px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .icon { font-size: 4em; margin-bottom: 20px; }
+        h2 { color: #e74c3c; margin-bottom: 15px; }
+        p { margin: 10px 0; line-height: 1.6; }
+        .points { 
+            font-size: 1.5em; 
+            color: #f39c12; 
+            font-weight: bold; 
+            margin: 15px 0;
+        }
+        .needed { color: #e74c3c; }
+        .btn {
+            display: inline-block;
+            margin: 10px 5px;
+            padding: 12px 25px;
+            background: #3498db;
+            color: #fff;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        .btn:hover { background: #2980b9; transform: translateY(-2px); }
+        .btn-secondary { background: #7f8c8d; }
+        .btn-secondary:hover { background: #95a5a6; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">⚠️</div>
+        <h2>رصيد غير كافي!</h2>
+        
+        {% if error == 'user_not_found' %}
+            <p>❌ المستخدم غير مسجل في النظام</p>
+            <p>يرجى البدء من البوت أولاً: <strong>/start</strong></p>
+        {% else %}
+            <p>💰 رصيدك الحالي:</p>
+            <div class="points">{{ points }} نقطة</div>
+            
+            {% if needed %}
+            <p>📈 تحتاج إلى <span class="needed">{{ needed }} نقطة إضافية</span> للبدء</p>
+            {% endif %}
+            
+            <p>💡 تكلفة اللعبة: 100 نقطة</p>
+        {% endif %}
+        
+        <div style="margin-top: 25px;">
+            <a href="https://t.me/MWBgames_bot?start=charge" class="btn">💳 شحن نقاطي الآن</a>
+            <br>
+            <a href="https://t.me/MWBgames_bot" class="btn btn-secondary">🔙 العودة للبوت</a>
+        </div>
+    </div>
+    
+    <script>
+        // إعادة التوجيه التلقائي للبوت بعد 10 ثواني
+        setTimeout(() => {
+            window.location.href = 'https://t.me/MWBgames_bot';
+        }, 10000);
+    </script>
+</body>
+</html>

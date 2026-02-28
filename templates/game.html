@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🧩 سودوكو - {{ difficulty }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            padding: 10px;
+            color: #fff;
+        }
+        .container { max-width: 600px; margin: 0 auto; }
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 15px;
+            margin-bottom: 15px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+        .header h2 { font-size: clamp(1.2rem, 4vw, 1.5rem); margin-bottom: 10px; color: #3498db; }
+        .info-bar { display: flex; justify-content: space-around; flex-wrap: wrap; gap: 10px; }
+        .info-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: clamp(0.85rem, 3vw, 1rem);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .timer {
+            background: rgba(231, 76, 60, 0.3);
+            border: 2px solid #e74c3c;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        
+        .game-board {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 10px;
+            margin-bottom: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+        table { width: 100%; border-collapse: collapse; margin: 0 auto; }
+        td {
+            width: 11.11%;
+            height: clamp(35px, 10vw, 50px);
+            border: 1px solid #bdc3c7;
+            text-align: center;
+        }
+        tr:nth-child(3n) td { border-bottom: 3px solid #2c3e50; }
+        td:nth-child(3n) { border-left: 3px solid #2c3e50; }
+        
+        .fixed { background: #ecf0f1; font-weight: bold; color: #2c3e50; font-size: 1.2rem; }
+        td input {
+            width: 100%; height: 100%; border: none; text-align: center;
+            font-size: 1.2rem; font-weight: bold; color: #2980b9;
+            background: transparent; outline: none; appearance: none; -moz-appearance: textfield;
+        }
+
+        .controls { display: flex; flex-direction: column; gap: 10px; }
+        .btn-row { display: flex; gap: 10px; }
+        .btn {
+            flex: 1; padding: 15px; border: none; border-radius: 12px;
+            font-weight: bold; cursor: pointer; transition: 0.3s;
+            display: flex; align-items: center; justify-content: center; gap: 5px;
+        }
+        .btn-hint { background: #f39c12; color: white; }
+        .btn-submit { background: #27ae60; color: white; }
+        .message {
+            padding: 15px; border-radius: 12px; margin-top: 15px;
+            text-align: center; display: none;
+        }
+        .success { background: rgba(46, 204, 113, 0.2); border: 2px solid #27ae60; color: #2ecc71; }
+        .error { background: rgba(231, 76, 60, 0.2); border: 2px solid #c0392b; color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>🧩 سودوكو - {{ difficulty }}</h2>
+            <div class="info-bar">
+                <div class="info-item">💰 <span id="points">{{ user_points }}</span></div>
+                <div class="info-item timer">⏱️ <span id="time-display">00:00</span></div>
+            </div>
+        </div>
+
+        <div class="game-board">
+            <table id="sudokuTable"></table>
+        </div>
+
+        <div class="controls">
+            <div class="btn-row">
+                <button class="btn btn-hint" onclick="getHint()">💡 تلميح</button>
+                <button class="btn btn-submit" id="submitBtn" onclick="checkSolution()">✔️ تحقق</button>
+            </div>
+        </div>
+        <div id="message" class="message"></div>
+    </div>
+
+    <script>
+    // ✅ استلام البيانات بشكل سليم وآمن
+    const puzzle = {{ puzzle_json|safe }};
+    const gameId = "{{ game_id }}";
+    const tgId = "{{ tg_id }}";
+    const difficulty = "{{ difficulty }}";
+    
+    // إعدادات الوقت بناءً على المستوى
+    const timeLimits = {'easy': 300, 'medium': 480, 'hard': 660, 'expert': 840};
+    let timeRemaining = timeLimits[difficulty] || 600;
+    let timerInterval;
+
+    // الدالة الرئيسية لبدء اللعبة
+    function initGame() {
+        const table = document.getElementById('sudokuTable');
+        table.innerHTML = ''; // تنظيف الجدول قبل البناء
+        
+        for(let i = 0; i < 9; i++) {
+            const row = table.insertRow();
+            for(let j = 0; j < 9; j++) {
+                const cell = row.insertCell();
+                const val = puzzle[i][j];
+                
+                if(val !== 0) {
+                    // خلية ثابتة (رقم أصلي من اللغز)
+                    cell.className = 'fixed';
+                    cell.textContent = val;
+                } else {
+                    // خلية إدخال للاعب
+                    const input = document.createElement('input');
+                    input.type = 'number';
+                    input.dataset.row = i;
+                    input.dataset.col = j;
+                    // منع إدخال أكثر من رقم واحد وضمان أنه بين 1-9
+                    input.oninput = function() { 
+                        this.value = this.value.replace(/[^1-9]/g, '');
+                        if(this.value.length > 1) this.value = this.value.slice(-1); 
+                    };
+                    cell.appendChild(input);
+                }
+            }
+        }
+        startTimer();
+    }
+
+    // دالة المؤقت
+    function startTimer() {
+        const timerDisplay = document.getElementById('time-display');
+        timerInterval = setInterval(() => {
+            timeRemaining--;
+            const mins = Math.floor(timeRemaining / 60);
+            const secs = timeRemaining % 60;
+            timerDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            
+            if(timeRemaining <= 0) {
+                clearInterval(timerInterval);
+                alert('⏰ انتهى الوقت!');
+                location.reload();
+            }
+        }, 1000);
+    }
+
+    // دالة التحقق من الحل (تتواصل مع مسار check_solution في app.py)
+    async function checkSolution() {
+        const board = [];
+        for(let i = 0; i < 9; i++) {
+            const row = [];
+            for(let j = 0; j < 9; j++) {
+                const input = document.querySelector(`input[data-row="${i}"][data-col="${j}"]`);
+                row.push(input ? (parseInt(input.value) || 0) : puzzle[i][j]);
+            }
+            board.push(row);
+        }
+
+        try {
+            const response = await fetch('/check_solution', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ board: board, game_id: gameId, tg_id: tgId })
+            });
+            const result = await response.json();
+            if(result.success) {
+                showMessage(`🎉 صحيح! +${result.reward} نقطة`, 'success');
+                clearInterval(timerInterval);
+                document.querySelectorAll('input').forEach(inp => inp.disabled = true);
+            } else {
+                showMessage('❌ الحل غير صحيح، حاول مجدداً', 'error');
+            }
+        } catch (e) { showMessage('❌ خطأ في الاتصال بالسيرفر', 'error'); }
+    }
+
+    // دالة الرسائل التنبيهية
+    function showMessage(text, type) {
+        const msg = document.getElementById('message');
+        msg.textContent = text;
+        msg.className = `message ${type}`;
+        msg.style.display = 'block';
+        setTimeout(() => { msg.style.display = 'none'; }, 5000);
+    }
+
+    async function getHint() {
+        try {
+            const response = await fetch('/get_hint', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ game_id: gameId, tg_id: tgId })
+            });
+            const result = await response.json();
+            
+            if(result.success) {
+                const {row, col, value} = result.hint;
+                const input = document.querySelector(`input[data-row="${row}"][data-col="${col}"]`);
+                if(input) { 
+                    input.value = value; 
+                    input.style.backgroundColor = '#fff3cd'; // تمييز الخلية المكتشفة
+                    input.disabled = true; // منع تغيير التلميح
+                }
+                // تحديث الرصيد في الواجهة
+                document.getElementById('points').textContent = result.new_points;
+                showMessage(`💡 متبقي لك ${result.hints_remaining} تلميحات`, 'info');
+            } else {
+                // إظهار رسالة الخطأ (مثل رصيد غير كافٍ أو تجاوز الحد)
+                showMessage(result.error, 'error');
+            }
+        } catch (e) { 
+            console.error(e);
+            showMessage('❌ خطأ في الاتصال بالسيرفر', 'error');
+        }
+    }
+
+    // تشغيل اللعبة عند تحميل الصفحة
+    window.onload = initGame;
+</script>
+</body>
+</html>
