@@ -29,7 +29,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
 # تأمين الرابط لـ Render (تفعيل HTTPS)
-Talisman(app, force_https=False, content_security_policy=None)
+Talisman(app, force_https=True, content_security_policy=None)
 limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 
 # ربط قاعدة البيانات والمولد
@@ -264,3 +264,4 @@ if __name__ == '__main__':
     # هذا السطر يعمل فقط عند التشغيل المحلي
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
