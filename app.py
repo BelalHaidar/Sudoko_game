@@ -41,7 +41,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GAME_URL = os.environ.get('GAME_URL', '').rstrip('/')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 
-# ✅ الثوابت والرسائل (مستخرجة من ملفك الأصلي)
+# ✅ الثوابت والرسائل
 WELCOME_TEXT = (
     "🎮 **أهلاً بك في تحدي السودوكو!**\n\n"
     "💡 **نظام النقاط:**\n"
@@ -84,26 +84,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     return ConversationHandler.END
-
-async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    user = db.get_user_by_telegram_id(user_id)
-    
-    text = f"👤 **معلومات الحساب**\n\n🆔 معرفك: `{user_id}`\n💰 رصيدك: {user['points'] if user else 0} نقطة\n🎮 الحالة: نشط"
-    kb = [[InlineKeyboardButton("🔙 عودة للقائمة", callback_data='back_to_menu')]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-
-async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    kb = [
-        [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
-        [InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],
-        [InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],
-        [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],
-        [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
-    ]
-    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ========== نظام الشحن (Charge) ==========
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,10 +161,14 @@ async def withdraw_phone_input(update: Update, context: ContextTypes.DEFAULT_TYP
 async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_db = db.get_user_by_telegram_id(query.from_user.id)
-    if user_db['points'] < context.user_data['w_pts']:
+    ud = context.user_data
+    if user_db['points'] < ud['w_pts']:
         await query.edit_message_text("❌ رصيدك غير كافٍ!")
         return ConversationHandler.END
-    db.deduct_points(user_db['id'], context.user_data['w_pts'])
+    
+    db.deduct_points(user_db['id'], ud['w_pts'])
+    admin_text = f"💰 **طلب سحب رصيد جديد**\n👤 {query.from_user.first_name}\n📱 `{ud['w_phone']}`\n💵 {ud['w_syp']} ل.س"
+    await context.bot.send_message(ADMIN_ID, admin_text) # تم الإصلاح هنا
     await query.edit_message_text("✅ **تم إرسال طلب السحب!**")
     return ConversationHandler.END
 
@@ -195,24 +179,17 @@ def telegram_webhook():
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, bot_app.bot)
     
-    # تشغيل المعالجة في خيط منفصل لتجنب خطأ Event Loop is closed
-    def run_async_process():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(bot_app.initialize())
-            loop.run_until_complete(bot_app.process_update(update))
-        finally:
-            loop.close()
-
-    threading.Thread(target=run_async_process).start()
+    async def process_task():
+        if not bot_app.running:
+            await bot_app.initialize()
+        await bot_app.process_update(update)
     
+    try:
+        async_to_sync(process_task)()
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        
     return 'OK', 200
-
-async def process_update_task(update):
-    if not bot_app.running:
-        await bot_app.initialize()
-    await bot_app.process_update(update)
 
 @app.route('/play')
 def play():
@@ -252,13 +229,12 @@ withdraw_handler = ConversationHandler(
     fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
 )
 
+# ✅ الترتيب الصحيح والكامل:
 bot_app.add_handler(charge_handler)
 bot_app.add_handler(withdraw_handler)
 bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WELCOME_TEXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), parse_mode='Markdown')))
-bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
-async def setup_webhook():
-    await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
 
+# دوال عامة
 async def choose_level(update, context):
     user_id = update.effective_user.id
     kb = [[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],[InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],[InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -269,6 +245,7 @@ async def profile_view(update, context):
     text = f"👤 **حسابي**\n💰 الرصيد: {user['points']} نقطة\n🆔 معرفك: `{user['telegram_id']}`"
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown')
 
+bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
 bot_app.add_handler(CallbackQueryHandler(choose_level, pattern='^choose_level$'))
 bot_app.add_handler(CallbackQueryHandler(profile_view, pattern='^profile$'))
 
@@ -283,7 +260,6 @@ def init_webhook():
         except Exception as e:
             logger.error(f"Webhook error: {e}")
 
-# مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
 def home():
     return "Sudoku Bot is Running!", 200
