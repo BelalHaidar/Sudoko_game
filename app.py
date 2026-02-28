@@ -41,7 +41,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GAME_URL = os.environ.get('GAME_URL', '').rstrip('/')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 
-# ✅ الثوابت والرسائل
+# ✅ الثوابت والرسائل (مستخرجة من ملفك الأصلي)
 WELCOME_TEXT = (
     "🎮 **أهلاً بك في تحدي السودوكو!**\n\n"
     "💡 **نظام النقاط:**\n"
@@ -84,6 +84,26 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     return ConversationHandler.END
+
+async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    user = db.get_user_by_telegram_id(user_id)
+    
+    text = f"👤 **معلومات الحساب**\n\n🆔 معرفك: `{user_id}`\n💰 رصيدك: {user['points'] if user else 0} نقطة\n🎮 الحالة: نشط"
+    kb = [[InlineKeyboardButton("🔙 عودة للقائمة", callback_data='back_to_menu')]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    kb = [
+        [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
+        [InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],
+        [InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],
+        [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],
+        [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
+    ]
+    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ========== نظام الشحن (Charge) ==========
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,14 +182,27 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_db = db.get_user_by_telegram_id(query.from_user.id)
     ud = context.user_data
+
     if user_db['points'] < ud['w_pts']:
-        await query.edit_message_text("❌ رصيدك غير كافٍ!")
+        await query.edit_message_text("❌ رصيدك غير كافٍ لإتمام هذه العملية.")
         return ConversationHandler.END
     
+    # خصم النقاط وإنشاء طلب سحب (تأكد من وجود جدول withdraw_requests في قاعدة البيانات)
+    # أو يمكنك استخدام جدول المراسلات لإخطار الأدمن
     db.deduct_points(user_db['id'], ud['w_pts'])
-    admin_text = f"💰 **طلب سحب رصيد جديد**\n👤 {query.from_user.first_name}\n📱 `{ud['w_phone']}`\n💵 {ud['w_syp']} ل.س"
-    await context.bot.send_message(ADMIN_ID, admin_text) # تم الإصلاح هنا
-    await query.edit_message_text("✅ **تم إرسال طلب السحب!**")
+    
+    # إشعار الأدمن بطلب السحب
+    admin_text = (
+        f"💰 **طلب سحب جديد**\n"
+        f"👤 المستخدم: {query.from_user.first_name}\n"
+        f"🆔 المعرف: `{query.from_user.id}`\n"
+        f"📱 الرقم: `{ud['w_phone']}`\n"
+        f"💵 المبلغ: {ud['w_syp']} ل.س\n"
+        f"📉 النقاط المخصومة: {ud['w_pts']}"
+    )
+    await context.bot.send_message(ADMIN_ID, admin_text)
+    
+    await query.edit_message_text("✅ **تم استلام طلب السحب بنجاح!** سيتم تحويل المبلغ خلال 24 ساعة.")
     return ConversationHandler.END
 
 # --- مسارات Flask ---
@@ -178,25 +211,33 @@ from asgiref.sync import async_to_sync
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    try:
-        # 1. استلام البيانات من تيليجرام
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, bot_app.bot)
-        
-        # 2. تعريف مهمة المعالجة
-        async def process_update():
+    update_data = request.get_json(force=True)
+    update = Update.de_json(update_data, bot_app.bot)
+    
+    # دالة داخلية للتشغيل في خيط منفصل
+    def run_async_process(upd):
+        # إنشاء حلقة أحداث جديدة تماماً لهذا الخيط
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
             if not bot_app.running:
-                await bot_app.initialize()
-            await bot_app.process_update(update)
-        
-        # 3. إجبار السيرفر على الانتظار حتى اكتمال المعالجة تماماً
-        # هذا يمنع خطأ "Event loop is closed"
-        async_to_sync(process_update)()
-        
-        return 'OK', 200
-    except Exception as e:
-        logger.error(f"Error in webhook: {e}")
-        return 'OK', 200 # نرسل OK دائماً لتيليجرام لمنع التكرار # نرسل OK دائماً لتيليجرام لمنع تكرار الإرسال
+                new_loop.run_until_complete(bot_app.initialize())
+            new_loop.run_until_complete(bot_app.process_update(upd))
+        except Exception as e:
+            logger.error(f"Error in background thread: {e}")
+        finally:
+            new_loop.close()
+
+    # بدء المعالجة في الخلفية وإرجاع رد فوري
+    threading.Thread(target=run_async_process, args=(update,)).start()
+    
+    return 'OK', 200
+
+async def process_update_task(update):
+    if not bot_app.running:
+        await bot_app.initialize()
+    await bot_app.process_update(update)
+
 @app.route('/play')
 def play():
     tg_id = request.args.get('user')
@@ -209,6 +250,37 @@ def play():
         return render_template('game.html', puzzle_json=json.dumps(puzzle), solution_json=json.dumps(solution), 
                              game_id=game_id, tg_id=tg_id, difficulty=difficulty, user_points=user['points']-100)
     return render_template('no_points.html', points=user['points'] if user else 0)
+
+@app.route('/check_solution', methods=['POST'])
+def check_solution():
+    try:
+        data = request.get_json()
+        game_id = data.get('game_id')
+        user_solution = data.get('solution') # مصفوفة الحل المرسلة من اللاعب
+
+        # جلب اللعبة من قاعدة البيانات للتأكد من الحل
+        game = db.get_game(game_id)
+        if not game:
+            return jsonify({'success': False, 'error': 'اللعبة غير موجودة'}), 404
+
+        correct_solution = game['solution'] # الحل الصحيح المخزن عند إنشاء اللعبة
+
+        # مقارنة الحلول
+        if user_solution == correct_solution:
+            # إضافة النقاط بناءً على المستوى
+            points_map = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
+            reward = points_map.get(game['difficulty'], 0)
+            
+            # تحديث حالة اللعبة في قاعدة البيانات (اختياري) وتزويد رصيد المستخدم
+            db.add_points(game['user_id'], reward, reason=f"Won {game['difficulty']} game")
+            
+            return jsonify({'success': True, 'reward': reward})
+        else:
+            return jsonify({'success': False, 'error': 'الحل غير صحيح، حاول مجدداً!'})
+
+    except Exception as e:
+        logger.error(f"Error in check_solution: {e}")
+        return jsonify({'success': False, 'error': 'خطأ داخلي في السيرفر'}), 500
 
 # --- تسجيل المعالجات (Handlers) ---
 
@@ -235,12 +307,13 @@ withdraw_handler = ConversationHandler(
     fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
 )
 
-# ✅ الترتيب الصحيح والكامل:
 bot_app.add_handler(charge_handler)
 bot_app.add_handler(withdraw_handler)
 bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WELCOME_TEXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), parse_mode='Markdown')))
+bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
+async def setup_webhook():
+    await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
 
-# دوال عامة
 async def choose_level(update, context):
     user_id = update.effective_user.id
     kb = [[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],[InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],[InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -251,7 +324,6 @@ async def profile_view(update, context):
     text = f"👤 **حسابي**\n💰 الرصيد: {user['points']} نقطة\n🆔 معرفك: `{user['telegram_id']}`"
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown')
 
-bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
 bot_app.add_handler(CallbackQueryHandler(choose_level, pattern='^choose_level$'))
 bot_app.add_handler(CallbackQueryHandler(profile_view, pattern='^profile$'))
 
@@ -266,6 +338,7 @@ def init_webhook():
         except Exception as e:
             logger.error(f"Webhook error: {e}")
 
+# مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
 def home():
     return "Sudoku Bot is Running!", 200
@@ -273,7 +346,3 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
-
-
-
