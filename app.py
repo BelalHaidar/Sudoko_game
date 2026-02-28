@@ -193,15 +193,12 @@ def telegram_webhook():
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, bot_app.bot)
     
-    # ✅ الحل الجذري: إنشاء Event Loop جديد لكل طلب Webhook
-    # هذا يمنع خطأ "Event loop is closed" الذي يسببه Gunicorn
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(bot_app.initialize())
-        loop.run_until_complete(bot_app.process_update(update))
-    finally:
-        loop.close()
+    async def process():
+        if not bot_app.running:
+            await bot_app.initialize()
+        await bot_app.process_update(update)
+    
+    asyncio.run(process())
     return 'OK', 200
 
 async def process_update_task(update):
