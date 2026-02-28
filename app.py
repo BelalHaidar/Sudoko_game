@@ -176,23 +176,34 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    update_data = request.get_json(force=True)
-    
-    # تعريف دالة داخلية للتشغيل لضمان إدارة حلقة الأحداث بشكل سليم
-    async def handle_update():
-        if not bot_app.running:
-            await bot_app.initialize()
-        
-        update = Update.de_json(update_data, bot_app.bot)
-        await bot_app.process_update(update)
-
     try:
-        # استخدام asyncio.run يضمن إنشاء حلقة أحداث نظيفة وإغلاقها فقط بعد انتهاء المهمة بالكامل
-        asyncio.run(handle_update())
-    except Exception as e:
-        logger.error(f"Error during webhook processing: {e}")
+        update_data = request.get_json(force=True)
+        update = Update.de_json(update_data, bot_app.bot)
         
-    return 'OK', 200
+        # إنشاء دالة للمعالجة في خيط منفصل
+        def thread_target(u):
+            # إنشاء حلقة أحداث جديدة تماماً لهذا الخيط
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # التأكد من تشغيل البوت
+                if not bot_app.running:
+                    loop.run_until_complete(bot_app.initialize())
+                
+                # تنفيذ التحديث بالكامل وانتظار النتيجة
+                loop.run_until_complete(bot_app.process_update(u))
+            except Exception as e:
+                logger.error(f"Error in thread: {e}")
+            finally:
+                loop.close()
+
+        # تشغيل المعالجة في الخلفية وإرجاع OK فوراً لتيليجرام
+        threading.Thread(target=thread_target, args=(update,)).start()
+        
+        return 'OK', 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return 'OK', 200 # نرسل OK دائماً لتيليجرام لمنع تكرار الإرسال
 @app.route('/play')
 def play():
     tg_id = request.args.get('user')
@@ -269,5 +280,6 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
