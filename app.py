@@ -176,20 +176,27 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    update_data = request.get_json(force=True)
-    update = Update.de_json(update_data, bot_app.bot)
-    
-    async def process_task():
-        if not bot_app.running:
-            await bot_app.initialize()
-        await bot_app.process_update(update)
-    
     try:
-        async_to_sync(process_task)()
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
+        update_data = request.get_json(force=True)
+        update = Update.de_json(update_data, bot_app.bot)
         
-    return 'OK', 200
+        # إنشاء خيط مع حلقة أحداث خاصة به لمنع التعارض مع Gunicorn
+        def run_in_thread(upd):
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                new_loop.run_until_complete(bot_app.initialize())
+                new_loop.run_until_complete(bot_app.process_update(upd))
+            except Exception as e:
+                logger.error(f"Thread error: {e}")
+            finally:
+                new_loop.close()
+
+        threading.Thread(target=run_in_thread, args=(update,)).start()
+        return 'OK', 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return 'Error', 500
 
 @app.route('/play')
 def play():
@@ -267,3 +274,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
