@@ -196,7 +196,17 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def telegram_webhook():
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, bot_app.bot)
-    async_to_sync(process_update_task)(update)
+    
+    # استخدام loop جديد لكل طلب يضمن عدم ظهور خطأ "loop is closed"
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # تهيئة البوت ومعالجة التحديث بالكامل قبل العودة
+        loop.run_until_complete(bot_app.initialize())
+        loop.run_until_complete(bot_app.process_update(update))
+    finally:
+        loop.close()
+        
     return 'OK', 200
 
 async def process_update_task(update):
@@ -283,4 +293,3 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
