@@ -18,7 +18,7 @@ class Database:
         conn = None
         try:
             # الاتصال بـ PostgreSQL مع تفعيل SSL للأمان
-            conn = psycopg2.connect(self.db_url, sslmode='require')
+            conn = psycopg2.connect(self.db_url)
             yield conn
         except Exception as e:
             logger.error(f"Database error: {e}")
