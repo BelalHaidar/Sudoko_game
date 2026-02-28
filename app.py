@@ -65,18 +65,17 @@ bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = db.get_user_by_telegram_id(user_id)
-    
     if not user:
         db.create_user(user_id, update.effective_user.username, update.effective_user.first_name)
         user = db.get_user_by_telegram_id(user_id)
-        
+    
     text = f"🎮 **القائمة الرئيسية**\n👤 {update.effective_user.first_name}\n💰 الرصيد: {user['points']} نقطة"
     kb = [
         [InlineKeyboardButton("🎯 ابدأ اللعب", callback_data='choose_level')],
         [InlineKeyboardButton("💳 شحن نقاط", callback_data='start_charge'), InlineKeyboardButton("💰 سحب رصيد", callback_data='start_withdraw')],
-        [InlineKeyboardButton("👤 حسابي", callback_data='profile'), InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
+        [InlineKeyboardButton("👤 حسابي", callback_data='profile')],
+        [InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
     ]
-    
     reply_markup = InlineKeyboardMarkup(kb)
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -122,13 +121,13 @@ async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     method = query.data.split('_')[1]
     context.user_data['c_meth'] = method
-    instr = "✅ **سيرياتيل:** حوّل يدوياً إلى: `49725859`" if method == 'Syriatel' else "✅ **MTN:** حوّل يدوياً إلى: `8598040534523762`"
+    instr = "✅ **سيرياتيل:** حوّل إلى: `49725859`" if method == 'Syriatel' else "✅ **MTN:** حوّل إلى: `8598040534523762`"
     await query.edit_message_text(f"{instr}\n\n📱 **أرسل رقم الهاتف** الذي حوّلت منه:")
     return C_PHONE
 
 async def charge_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['c_phone'] = update.message.text.strip()
-    await update.message.reply_text("🔢 **أرسل الآن رقم العملية (Transaction ID):**")
+    await update.message.reply_text("🔢 **أرسل رقم العملية (Transaction ID):**")
     return C_TRANS
 
 async def charge_trans_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,9 +142,7 @@ async def charge_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.user_data
     pkg = ud['c_pkg'].split('_')
     user_db = db.get_user_by_telegram_id(query.from_user.id)
-    # ملاحظة: يجب التأكد من وجود دالة create_charge_request في database.py
     rid = db.create_charge_request(user_db['id'], int(pkg[1]), int(pkg[2]), ud['c_meth'], ud['c_phone'], ud['c_trans'])
-    
     admin_kb = [[InlineKeyboardButton("✅ قبول", callback_data=f"appc_{rid}"), InlineKeyboardButton("❌ رفض", callback_data=f"rejc_{rid}")]]
     await context.bot.send_message(ADMIN_ID, f"🔔 **شحن جديد #{rid}**\n👤 {query.from_user.first_name}\n📦 {pkg[1]}ل.س", reply_markup=InlineKeyboardMarkup(admin_kb))
     await query.edit_message_text("✅ **تم استلام الطلب!** سيتم مراجعته قريباً.")
@@ -185,7 +182,6 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_db['points'] < context.user_data['w_pts']:
         await query.edit_message_text("❌ رصيدك غير كافٍ!")
         return ConversationHandler.END
-    
     db.deduct_points(user_db['id'], context.user_data['w_pts'])
     await query.edit_message_text("✅ **تم إرسال طلب السحب!**")
     return ConversationHandler.END
@@ -197,16 +193,15 @@ def telegram_webhook():
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, bot_app.bot)
     
-    # استخدام loop جديد لكل طلب يضمن عدم ظهور خطأ "loop is closed"
+    # ✅ الحل الجذري: إنشاء Event Loop جديد لكل طلب Webhook
+    # هذا يمنع خطأ "Event loop is closed" الذي يسببه Gunicorn
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        # تهيئة البوت ومعالجة التحديث بالكامل قبل العودة
         loop.run_until_complete(bot_app.initialize())
         loop.run_until_complete(bot_app.process_update(update))
     finally:
         loop.close()
-        
     return 'OK', 200
 
 async def process_update_task(update):
@@ -219,7 +214,6 @@ def play():
     tg_id = request.args.get('user')
     difficulty = request.args.get('difficulty', 'medium')
     user = db.get_user_by_telegram_id(int(tg_id))
-    
     if user and user['points'] >= 100:
         db.deduct_points(user['id'], 100)
         puzzle, solution = generator.generate_puzzle(difficulty)
@@ -257,22 +251,21 @@ bot_app.add_handler(charge_handler)
 bot_app.add_handler(withdraw_handler)
 bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WELCOME_TEXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), parse_mode='Markdown')))
 bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
-bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$')) # تم الإصلاح هنا
-bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$')) # تم الإصلاح هنا
-
 async def setup_webhook():
     await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
 
-async def choose_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_level(update, context):
     user_id = update.effective_user.id
-    kb = [
-        [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
-        [InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],
-        [InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],
-        [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")], # 
-        [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
-    ]
-    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    kb = [[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],[InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],[InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
+    await update.callback_query.edit_message_text("🎯 **اختر المستوى:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def profile_view(update, context):
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    text = f"👤 **حسابي**\n💰 الرصيد: {user['points']} نقطة\n🆔 معرفك: `{user['telegram_id']}`"
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown')
+
+bot_app.add_handler(CallbackQueryHandler(choose_level, pattern='^choose_level$'))
+bot_app.add_handler(CallbackQueryHandler(profile_view, pattern='^profile$'))
 
 @app.before_request
 def init_webhook():
