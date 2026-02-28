@@ -9,6 +9,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 from asgiref.sync import async_to_sync
+import threading
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -47,6 +48,7 @@ WELCOME_TEXT = (
     "سهل: +500 | متوسط: +1000 | صعب: +1500 | خبير: +5000\n\n"
     "💰 **القيمة:** كل 10 نقاط = 1 ليرة سورية\n"
     "🎮 تكلفة اللعبة: 100 نقطة\n\n"
+    "💰 **تخصم عمولة 10% على كل عملية سحب من البوت\n"
     "🎮 أي خطأ في اختيار رقم الهاتف أو باقة الشحن أو السحب على مسؤولية اللاعب فقط\n\n"
     "✅ **هل توافق على الشروط للبدء؟**"
 )
@@ -193,12 +195,18 @@ def telegram_webhook():
     update_data = request.get_json(force=True)
     update = Update.de_json(update_data, bot_app.bot)
     
-    async def process():
-        if not bot_app.running:
-            await bot_app.initialize()
-        await bot_app.process_update(update)
+    # تشغيل المعالجة في خيط منفصل لتجنب خطأ Event Loop is closed
+    def run_async_process():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(bot_app.initialize())
+            loop.run_until_complete(bot_app.process_update(update))
+        finally:
+            loop.close()
+
+    threading.Thread(target=run_async_process).start()
     
-    asyncio.run(process())
     return 'OK', 200
 
 async def process_update_task(update):
