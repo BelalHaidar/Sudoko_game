@@ -63,17 +63,31 @@ bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
 # ✅ القائمة الرئيسية
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    user_name = update.effective_user.username
+    first_name = update.effective_user.first_name
+    
+    # محاولة جلب المستخدم
     user = db.get_user_by_telegram_id(user_id)
-    text = f"🎮 **القائمة الرئيسية**\n👤 {update.effective_user.first_name}\n💰 الرصيد: {user['points']} نقطة"
+    
+    # إذا لم يكن موجوداً، قم بإنشائه فوراً
+    if not user:
+        db.create_user(user_id, user_name, first_name)
+        user = db.get_user_by_telegram_id(user_id)
+        
+    text = f"🎮 **القائمة الرئيسية**\n👤 {first_name}\n💰 الرصيد: {user['points']} نقطة"
     kb = [
         [InlineKeyboardButton("🎯 ابدأ اللعب", callback_data='choose_level')],
         [InlineKeyboardButton("💳 شحن نقاط", callback_data='start_charge'), InlineKeyboardButton("💰 سحب رصيد", callback_data='start_withdraw')],
         [InlineKeyboardButton("👤 حسابي", callback_data='profile'), InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
     ]
+    
+    reply_markup = InlineKeyboardMarkup(kb)
+    
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    
     return ConversationHandler.END
 
 # ========== نظام الشحن (Charge) ==========
