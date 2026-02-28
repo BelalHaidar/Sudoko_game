@@ -10,19 +10,22 @@ from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 from asgiref.sync import async_to_sync
 import threading
+import nest_asyncio
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
+    Application, ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
     ContextTypes, MessageHandler, filters, ConversationHandler
 )
 
+import functools
 from database import Database
 from sudoku import SudokuGenerator
 
 # ✅ الإعدادات الأساسية
 load_dotenv()
+nest_asyncio.apply()
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,7 @@ C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
 # --- إعداد البوت (Webhook) ---
-bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
+bot_app = Application.builder().token(BOT_TOKEN).build()
 
 # ✅ القائمة الرئيسية
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,29 +210,41 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- مسارات Flask ---
 
-from asgiref.sync import async_to_sync
+def process_update_sync(update_data):
+    """معالجة التحديث بشكل متزامن"""
+    try:
+        update = Update.de_json(update_data, bot_app.bot)
+        
+        # إنشاء حلقة أحداث جديدة
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            # التأكد من تهيئة التطبيق
+            if not bot_app.running:
+                loop.run_until_complete(bot_app.initialize())
+            
+            # معالجة التحديث
+            loop.run_until_complete(bot_app.process_update(update))
+            
+        finally:
+            # تنظيف الحلقة
+            loop.run_until_complete(asyncio.sleep(0))
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
+    """استقبال webhook من تيليجرام"""
     update_data = request.get_json(force=True)
-    update = Update.de_json(update_data, bot_app.bot)
     
-    # دالة داخلية للتشغيل في خيط منفصل
-    def run_async_process(upd):
-        # إنشاء حلقة أحداث جديدة تماماً لهذا الخيط
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        try:
-            if not bot_app.running:
-                new_loop.run_until_complete(bot_app.initialize())
-            new_loop.run_until_complete(bot_app.process_update(upd))
-        except Exception as e:
-            logger.error(f"Error in background thread: {e}")
-        finally:
-            new_loop.close()
-
-    # بدء المعالجة في الخلفية وإرجاع رد فوري
-    threading.Thread(target=run_async_process, args=(update,)).start()
+    # معالجة التحديث في نفس الخيط (بدون threading)
+    # أو يمكنك استخدام threading مع تحسينات
+    thread = threading.Thread(target=process_update_sync, args=(update_data,))
+    thread.daemon = True
+    thread.start()
     
     return 'OK', 200
 
@@ -329,14 +344,24 @@ bot_app.add_handler(CallbackQueryHandler(profile_view, pattern='^profile$'))
 
 @app.before_request
 def init_webhook():
+    """تهيئة webhook مرة واحدة فقط"""
     if not hasattr(app, 'webhook_initialized'):
         try:
+            # استخدام حلقة أحداث منفصلة لتعيين webhook
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}"))
+            
+            async def setup():
+                await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+                logger.info(f"Webhook set to {GAME_URL}/{BOT_TOKEN}")
+            
+            loop.run_until_complete(setup())
+            loop.close()
+            
             app.webhook_initialized = True
+            
         except Exception as e:
-            logger.error(f"Webhook error: {e}")
+            logger.error(f"Webhook initialization error: {e}")
 
 # مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
