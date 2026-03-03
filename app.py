@@ -63,11 +63,18 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
-# --- إعداد البوت ---
+# ==================== إعداد البوت بشكل صحيح ====================
+
+# إنشاء حلقة أحداث دائمة للتطبيق
+bot_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(bot_loop)
+
+# إنشاء تطبيق البوت
 request_obj = HTTPXRequest(connection_pool_size=8)
 bot_app = Application.builder().token(BOT_TOKEN).request(request_obj).build()
 
-# ✅ جميع handlers هنا
+# ==================== جميع handlers هنا ====================
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج أمر /start"""
     logger.info(f"User {update.effective_user.id} started the bot")
@@ -96,7 +103,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-        await update.callback_query.answer()
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     return ConversationHandler.END
@@ -104,7 +110,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض الملف الشخصي"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     user = db.get_user_by_telegram_id(user_id)
     
@@ -114,8 +119,6 @@ async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار مستوى الصعوبة"""
-    query = update.callback_query
-    await query.answer()
     user_id = update.effective_user.id
     kb = [
         [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
@@ -124,22 +127,19 @@ async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],
         [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
     ]
-    await query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-# ========== نظام الشحن (Charge) ==========
+# ========== نظام الشحن ==========
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بدء عملية الشحن"""
-    query = update.callback_query
-    await query.answer()
     kb = [[InlineKeyboardButton(f"📦 {s}ل.س ({p}ن)", callback_data=f"cp_{s}_{p}")] for s, p in CHARGE_PACKAGES]
     kb.append([InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')])
-    await query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await update.callback_query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return C_PKG
 
 async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار باقة الشحن"""
     query = update.callback_query
-    await query.answer()
     context.user_data['c_pkg'] = query.data
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')], 
           [InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')], 
@@ -148,6 +148,7 @@ async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
     return C_METH
 
 async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختيار طريقة الدفع"""
     query = update.callback_query
     method = query.data.split('_')[1]
     context.user_data['c_meth'] = method
@@ -156,11 +157,13 @@ async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     return C_PHONE
 
 async def charge_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """استقبال رقم الهاتف"""
     context.user_data['c_phone'] = update.message.text.strip()
     await update.message.reply_text("🔢 **أرسل رقم العملية (Transaction ID):**")
     return C_TRANS
 
 async def charge_trans_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """استقبال رقم العملية"""
     context.user_data['c_trans'] = update.message.text.strip()
     pkg = context.user_data['c_pkg'].split('_')
     kb = [[InlineKeyboardButton("✅ تأكيد", callback_data='c_confirm')], [InlineKeyboardButton("❌ إلغاء", callback_data='back_to_menu')]]
@@ -168,6 +171,7 @@ async def charge_trans_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return C_CONFIRM
 
 async def charge_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تأكيد الشحن وإرسال إشعار للأدمن"""
     query = update.callback_query
     ud = context.user_data
     pkg = ud['c_pkg'].split('_')
@@ -178,13 +182,15 @@ async def charge_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ **تم استلام الطلب!** سيتم مراجعته قريباً.")
     return ConversationHandler.END
 
-# ========== نظام السحب (Withdraw) ==========
+# ========== نظام السحب ==========
 async def start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء عملية السحب"""
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل كاش", callback_data='wm_Syriatel'), InlineKeyboardButton("🟡 MTN كاش", callback_data='wm_MTN')], [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]]
     await update.callback_query.edit_message_text("🏦 **اختر طريقة السحب:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return W_METH
 
 async def withdraw_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختيار طريقة السحب"""
     query = update.callback_query
     context.user_data['w_meth'] = query.data.split('_')[1]
     kb = [[InlineKeyboardButton(f"{s} ل.س", callback_data=f"wa_{s}_{s*10}")] for s in WITHDRAW_PACKAGES]
@@ -192,6 +198,7 @@ async def withdraw_meth_selected(update: Update, context: ContextTypes.DEFAULT_T
     return W_AMT
 
 async def withdraw_amt_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختيار المبلغ"""
     query = update.callback_query
     _, syp, pts = query.data.split('_')
     context.user_data.update({'w_syp': int(syp), 'w_pts': int(pts)})
@@ -199,6 +206,7 @@ async def withdraw_amt_selected(update: Update, context: ContextTypes.DEFAULT_TY
     return W_PHONE
 
 async def withdraw_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """استقبال رقم الهاتف للسحب"""
     context.user_data['w_phone'] = update.message.text.strip()
     ud = context.user_data
     text = f"📋 **تأكيد سحب {ud['w_syp']} ل.س؟**\n📱 الرقم: {ud['w_phone']}"
@@ -207,6 +215,7 @@ async def withdraw_phone_input(update: Update, context: ContextTypes.DEFAULT_TYP
     return W_CONFIRM
 
 async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تأكيد السحب"""
     query = update.callback_query
     user_db = db.get_user_by_telegram_id(query.from_user.id)
     ud = context.user_data
@@ -229,6 +238,8 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text("✅ **تم استلام طلب السحب بنجاح!** سيتم تحويل المبلغ خلال 24 ساعة.")
     return ConversationHandler.END
+
+# ==================== تسجيل المعالجات ====================
 
 def setup_handlers():
     """إعداد جميع معالجات البوت"""
@@ -275,51 +286,43 @@ def setup_handlers():
 # تهيئة المعالجات
 setup_handlers()
 
-# --- مسارات Flask ---
+# ==================== تهيئة البوت في حلقة الأحداث الدائمة ====================
+
+async def initialize_bot():
+    """تهيئة البوت وتعيين webhook"""
+    await bot_app.initialize()
+    success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+    if success:
+        logger.info(f"✅ Webhook set to {GAME_URL}/{BOT_TOKEN}")
+    else:
+        logger.error("❌ Failed to set webhook")
+
+# تشغيل التهيئة في حلقة الأحداث
+bot_loop.run_until_complete(initialize_bot())
+
+# ==================== مسارات Flask ====================
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    """استقبال تحديثات تيليجرام"""
+    """استقبال تحديثات تيليجرام - يتم معالجتها في حلقة الأحداث الدائمة"""
     try:
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, bot_app.bot)
         
-        # معالجة التحديث في حلقة أحداث منفصلة
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # معالجة التحديث في حلقة الأحداث الدائمة
+        future = asyncio.run_coroutine_threadsafe(
+            bot_app.process_update(update), 
+            bot_loop
+        )
         
-        try:
-            if not bot_app.running:
-                loop.run_until_complete(bot_app.initialize())
-            
-            loop.run_until_complete(bot_app.process_update(update))
-            logger.info(f"Processed update {update.update_id}")
-        finally:
-            loop.close()
-            
+        # انتظار النتيجة (مع timeout)
+        future.result(timeout=5)
+        logger.debug(f"Processed update {update.update_id}")
+        
     except Exception as e:
         logger.error(f"Error processing update: {e}")
     
     return 'OK', 200
-
-def setup_webhook():
-    """تهيئة webhook بشكل متزامن"""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        async def init():
-            await bot_app.initialize()
-            await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-            logger.info(f"✅ Webhook set to {GAME_URL}/{BOT_TOKEN}")
-        
-        loop.run_until_complete(init())
-        loop.close()
-    except Exception as e:
-        logger.error(f"Webhook setup error: {e}")
-
-# تشغيل تهيئة webhook
-setup_webhook()
 
 @app.route('/play')
 def play():
@@ -359,11 +362,26 @@ def check_solution():
         logger.error(f"Error in check_solution: {e}")
         return jsonify({'success': False, 'error': 'خطأ داخلي في السيرفر'}), 500
 
-# مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
 def home():
     return "Sudoku Bot is Running!", 200
 
-if __name__ == '__main__':
+# ==================== تشغيل التطبيق ====================
+
+def run_flask():
+    """تشغيل Flask في الخيط الرئيسي"""
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
+def run_bot_loop():
+    """تشغيل حلقة الأحداث في خيط منفصل"""
+    asyncio.set_event_loop(bot_loop)
+    bot_loop.run_forever()
+
+if __name__ == '__main__':
+    # تشغيل حلقة الأحداث في خيط منفصل
+    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+    bot_thread.start()
+    
+    # تشغيل Flask في الخيط الرئيسي
+    run_flask()
