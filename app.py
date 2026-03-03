@@ -26,6 +26,10 @@ from sudoku import SudokuGenerator
 # ✅ الإعدادات الأساسية
 load_dotenv()
 nest_asyncio.apply()
+
+# إنشاء حلقة أحداث عامة للتطبيق
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -235,16 +239,38 @@ def process_update_sync(update_data):
     except Exception as e:
         logger.error(f"Error processing update: {e}")
 
+background_tasks = set()
+
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
     """استقبال webhook من تيليجرام"""
     update_data = request.get_json(force=True)
     
-    # معالجة التحديث في نفس الخيط (بدون threading)
-    # أو يمكنك استخدام threading مع تحسينات
-    thread = threading.Thread(target=process_update_sync, args=(update_data,))
-    thread.daemon = True
-    thread.start()
+    try:
+        # معالجة التحديث بشكل غير متزامن في نفس الحلقة
+        update = Update.de_json(update_data, bot_app.bot)
+        
+        # التأكد من أن التطبيق يعمل
+        if not bot_app.running:
+            future = asyncio.run_coroutine_threadsafe(bot_app.initialize(), loop)
+            future.result(timeout=5)
+        
+        # معالجة التحديث
+        future = asyncio.run_coroutine_threadsafe(bot_app.process_update(update), loop)
+        
+        # إضافة callback للتعامل مع الأخطاء
+        def handle_future_done(fut):
+            try:
+                fut.result()
+            except Exception as e:
+                logger.error(f"Error in update processing: {e}")
+        
+        future.add_done_callback(handle_future_done)
+        background_tasks.add(future)
+        future.add_done_callback(background_tasks.discard)
+        
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
     
     return 'OK', 200
 
@@ -347,16 +373,14 @@ def init_webhook():
     """تهيئة webhook مرة واحدة فقط"""
     if not hasattr(app, 'webhook_initialized'):
         try:
-            # استخدام حلقة أحداث منفصلة لتعيين webhook
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            async def setup():
+            # تشغيل تهيئة webhook في نفس الحلقة
+            async def setup_webhook():
                 await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
                 logger.info(f"Webhook set to {GAME_URL}/{BOT_TOKEN}")
             
-            loop.run_until_complete(setup())
-            loop.close()
+            # تشغيل الدالة غير المتزامنة بشكل متزامن
+            future = asyncio.run_coroutine_threadsafe(setup_webhook(), loop)
+            future.result(timeout=10)
             
             app.webhook_initialized = True
             
@@ -367,6 +391,24 @@ def init_webhook():
 @app.route('/')
 def home():
     return "Sudoku Bot is Running!", 200
+
+def start_event_loop():
+    """تشغيل حلقة الأحداث في خلفية التطبيق"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+# بدء حلقة الأحداث في خيط منفصل
+event_loop_thread = threading.Thread(target=start_event_loop, daemon=True)
+event_loop_thread.start()
+
+# تهيئة تطبيق البوت في حلقة الأحداث
+async def init_bot():
+    await bot_app.initialize()
+    await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+    logger.info("Bot initialized and webhook set")
+
+future = asyncio.run_coroutine_threadsafe(init_bot(), loop)
+future.result(timeout=10)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
