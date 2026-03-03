@@ -8,8 +8,10 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 import threading
-from queue import Queue
-import time
+import nest_asyncio
+
+# تطبيق nest_asyncio للسماح بتداخل حلقات الأحداث
+nest_asyncio.apply()
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -17,6 +19,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
     ContextTypes, MessageHandler, filters, ConversationHandler
 )
+from telegram.request import HTTPXRequest
 
 from database import Database
 from sudoku import SudokuGenerator
@@ -29,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
-# تأمين الرابط لـ Render (تفعيل HTTPS)
+# تأمين الرابط لـ Render
 Talisman(app, force_https=False, content_security_policy=None)
 limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 
@@ -61,11 +64,21 @@ C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
 # --- إعداد البوت ---
-bot_app = Application.builder().token(BOT_TOKEN).build()
+request_obj = HTTPXRequest(connection_pool_size=8)
+bot_app = Application.builder().token(BOT_TOKEN).request(request_obj).build()
 
-# تعريف جميع الـ handlers أولاً
-# ✅ القائمة الرئيسية
+# ✅ جميع handlers هنا
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج أمر /start"""
+    logger.info(f"User {update.effective_user.id} started the bot")
+    await update.message.reply_text(
+        WELCOME_TEXT,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]),
+        parse_mode='Markdown'
+    )
+
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض القائمة الرئيسية"""
     user_id = update.effective_user.id
     user = db.get_user_by_telegram_id(user_id)
     if not user:
@@ -80,14 +93,18 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📞 الدعم", url="https://t.me/AskBelal")]
     ]
     reply_markup = InlineKeyboardMarkup(kb)
+    
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.callback_query.answer()
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     return ConversationHandler.END
 
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض الملف الشخصي"""
     query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     user = db.get_user_by_telegram_id(user_id)
     
@@ -96,6 +113,9 @@ async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختيار مستوى الصعوبة"""
+    query = update.callback_query
+    await query.answer()
     user_id = update.effective_user.id
     kb = [
         [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
@@ -104,19 +124,26 @@ async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],
         [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
     ]
-    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ========== نظام الشحن (Charge) ==========
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء عملية الشحن"""
+    query = update.callback_query
+    await query.answer()
     kb = [[InlineKeyboardButton(f"📦 {s}ل.س ({p}ن)", callback_data=f"cp_{s}_{p}")] for s, p in CHARGE_PACKAGES]
     kb.append([InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')])
-    await update.callback_query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return C_PKG
 
 async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اختيار باقة الشحن"""
     query = update.callback_query
+    await query.answer()
     context.user_data['c_pkg'] = query.data
-    kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')], [InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')], [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]]
+    kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')], 
+          [InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')], 
+          [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]]
     await query.edit_message_text("🏦 **اختر طريقة الدفع:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return C_METH
 
@@ -203,116 +230,96 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ **تم استلام طلب السحب بنجاح!** سيتم تحويل المبلغ خلال 24 ساعة.")
     return ConversationHandler.END
 
-# --- تسجيل المعالجات (Handlers) ---
-# هذا يجب أن يكون قبل بدء تشغيل البوت
-
-# معالج أمر /start
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        WELCOME_TEXT, 
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), 
-        parse_mode='Markdown'
+def setup_handlers():
+    """إعداد جميع معالجات البوت"""
+    
+    # معالج أمر /start
+    bot_app.add_handler(CommandHandler("start", start_command))
+    
+    # معالج الشحن
+    charge_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
+        states={
+            C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
+            C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')],
+            C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_input)],
+            C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
+            C_CONFIRM: [CallbackQueryHandler(charge_final, pattern='^c_confirm$')]
+        },
+        fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+        per_message=False,
+        name="charge_conversation"
     )
-
-# إنشاء معالجات المحادثات
-charge_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
-    states={
-        C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
-        C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')],
-        C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_input)],
-        C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
-        C_CONFIRM: [CallbackQueryHandler(charge_final, pattern='^c_confirm$')]
-    },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
-    per_message=False
-)
-
-withdraw_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
-    states={
-        W_METH: [CallbackQueryHandler(withdraw_meth_selected, pattern='^wm_')],
-        W_AMT: [CallbackQueryHandler(withdraw_amt_selected, pattern='^wa_')],
-        W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
-        W_CONFIRM: [CallbackQueryHandler(withdraw_final, pattern='^w_confirm$')]
-    },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
-    per_message=False
-)
-
-# إضافة جميع المعالجات إلى البوت
-bot_app.add_handler(CommandHandler("start", start_command))
-bot_app.add_handler(charge_handler)
-bot_app.add_handler(withdraw_handler)
-bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
-bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
-bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
-
-# --- الآن يمكننا بدء تشغيل البوت ---
-
-# إنشاء حلقة أحداث دائمة وقائمة انتظار
-bot_loop = asyncio.new_event_loop()
-update_queue = Queue()
-
-def bot_worker():
-    """تشغيل حلقة أحداث دائمة للبوت"""
-    asyncio.set_event_loop(bot_loop)
+    bot_app.add_handler(charge_conv)
     
-    # تهيئة البوت وتعيين webhook
-    async def init_bot():
-        await bot_app.initialize()
-        success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-        if success:
-            logger.info(f"✅ Bot initialized and webhook set to {GAME_URL}/{BOT_TOKEN}")
-        else:
-            logger.error("❌ Failed to set webhook")
+    # معالج السحب
+    withdraw_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
+        states={
+            W_METH: [CallbackQueryHandler(withdraw_meth_selected, pattern='^wm_')],
+            W_AMT: [CallbackQueryHandler(withdraw_amt_selected, pattern='^wa_')],
+            W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
+            W_CONFIRM: [CallbackQueryHandler(withdraw_final, pattern='^w_confirm$')]
+        },
+        fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+        per_message=False,
+        name="withdraw_conversation"
+    )
+    bot_app.add_handler(withdraw_conv)
     
-    # تشغيل التهيئة
-    try:
-        bot_loop.run_until_complete(init_bot())
-    except Exception as e:
-        logger.error(f"Error in bot initialization: {e}")
-    
-    # معالجة التحديثات من قائمة الانتظار
-    async def process_updates():
-        while True:
-            try:
-                if not update_queue.empty():
-                    update_data = update_queue.get()
-                    update = Update.de_json(update_data, bot_app.bot)
-                    await bot_app.process_update(update)
-                    logger.info(f"Processed update: {update.update_id}")
-                else:
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Error in bot_worker: {e}")
-                await asyncio.sleep(1)
-    
-    # تشغيل حلقة معالجة التحديثات
-    try:
-        bot_loop.run_until_complete(process_updates())
-    except Exception as e:
-        logger.error(f"Bot worker stopped: {e}")
+    # معالجات callback_query العامة
+    bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
+    bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
+    bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
 
-# بدء تشغيل العامل في خيط منفصل
-bot_thread = threading.Thread(target=bot_worker, daemon=True)
-bot_thread.start()
-
-# انتظر قليلاً للتأكد من تهيئة البوت
-time.sleep(2)
+# تهيئة المعالجات
+setup_handlers()
 
 # --- مسارات Flask ---
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def telegram_webhook():
-    """استقبال webhook ووضعه في قائمة الانتظار"""
+def webhook():
+    """استقبال تحديثات تيليجرام"""
     try:
         update_data = request.get_json(force=True)
-        update_queue.put(update_data)
-        logger.debug(f"Update queued: {update_data.get('update_id', 'unknown')}")
+        update = Update.de_json(update_data, bot_app.bot)
+        
+        # معالجة التحديث في حلقة أحداث منفصلة
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            if not bot_app.running:
+                loop.run_until_complete(bot_app.initialize())
+            
+            loop.run_until_complete(bot_app.process_update(update))
+            logger.info(f"Processed update {update.update_id}")
+        finally:
+            loop.close()
+            
     except Exception as e:
-        logger.error(f"Error queueing update: {e}")
+        logger.error(f"Error processing update: {e}")
+    
     return 'OK', 200
+
+def setup_webhook():
+    """تهيئة webhook بشكل متزامن"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def init():
+            await bot_app.initialize()
+            await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+            logger.info(f"✅ Webhook set to {GAME_URL}/{BOT_TOKEN}")
+        
+        loop.run_until_complete(init())
+        loop.close()
+    except Exception as e:
+        logger.error(f"Webhook setup error: {e}")
+
+# تشغيل تهيئة webhook
+setup_webhook()
 
 @app.route('/play')
 def play():
@@ -343,9 +350,7 @@ def check_solution():
         if user_solution == correct_solution:
             points_map = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
             reward = points_map.get(game['difficulty'], 0)
-            
             db.add_points(game['user_id'], reward, reason=f"Won {game['difficulty']} game")
-            
             return jsonify({'success': True, 'reward': reward})
         else:
             return jsonify({'success': False, 'error': 'الحل غير صحيح، حاول مجدداً!'})
