@@ -8,6 +8,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 import threading
+from queue import Queue
+import time
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -39,7 +41,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GAME_URL = os.environ.get('GAME_URL', '').rstrip('/')
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
 
-# ✅ الثوابت والرسائل (مستخرجة من ملفك الأصلي)
+# ✅ الثوابت والرسائل
 WELCOME_TEXT = (
     "🎮 **أهلاً بك في تحدي السودوكو!**\n\n"
     "💡 **نظام النقاط:**\n"
@@ -58,8 +60,61 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
-# --- إعداد البوت (باستخدام طريقة مبسطة) ---
+# --- إعداد البوت ---
 bot_app = Application.builder().token(BOT_TOKEN).build()
+
+# إنشاء حلقة أحداث دائمة وقائمة انتظار
+bot_loop = asyncio.new_event_loop()
+update_queue = Queue()
+
+def bot_worker():
+    """تشغيل حلقة أحداث دائمة للبوت"""
+    asyncio.set_event_loop(bot_loop)
+    
+    # تهيئة البوت وتعيين webhook
+    async def init_bot():
+        await bot_app.initialize()
+        success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+        if success:
+            logger.info(f"✅ Bot initialized and webhook set to {GAME_URL}/{BOT_TOKEN}")
+        else:
+            logger.error("❌ Failed to set webhook")
+    
+    # تشغيل التهيئة
+    try:
+        bot_loop.run_until_complete(init_bot())
+    except Exception as e:
+        logger.error(f"Error in bot initialization: {e}")
+    
+    # معالجة التحديثات من قائمة الانتظار
+    async def process_updates():
+        while True:
+            try:
+                if not update_queue.empty():
+                    update_data = update_queue.get()
+                    update = Update.de_json(update_data, bot_app.bot)
+                    await bot_app.process_update(update)
+                    logger.info(f"Processed update: {update.update_id}")
+                else:
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.error(f"Error in bot_worker: {e}")
+                await asyncio.sleep(1)
+    
+    # تشغيل حلقة معالجة التحديثات
+    try:
+        bot_loop.run_until_complete(process_updates())
+    except Exception as e:
+        logger.error(f"Bot worker stopped: {e}")
+
+# بدء تشغيل العامل في خيط منفصل
+bot_thread = threading.Thread(target=bot_worker, daemon=True)
+bot_thread.start()
+
+# انتظر قليلاً للتأكد من تهيئة البوت
+time.sleep(2)
+
+# باقي الكود كما هو (جميع الـ handlers)...
 
 # ✅ القائمة الرئيسية
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,25 +261,13 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    """معالجة webhook بشكل متزامن باستخدام asgiref.sync.async_to_sync"""
-    update_data = request.get_json(force=True)
-    
+    """استقبال webhook ووضعه في قائمة الانتظار"""
     try:
-        update = Update.de_json(update_data, bot_app.bot)
-        
-        # معالجة التحديث بشكل متزامن
-        async def process_update():
-            if not bot_app.running:
-                await bot_app.initialize()
-            await bot_app.process_update(update)
-        
-        # استخدام async_to_sync لتحويل الدالة غير المتزامنة إلى متزامنة
-        from asgiref.sync import async_to_sync
-        async_to_sync(process_update)()
-        
+        update_data = request.get_json(force=True)
+        update_queue.put(update_data)
+        logger.debug(f"Update queued: {update_data.get('update_id', 'unknown')}")
     except Exception as e:
-        logger.error(f"Error processing update: {e}")
-    
+        logger.error(f"Error queueing update: {e}")
     return 'OK', 200
 
 @app.route('/play')
@@ -301,22 +344,6 @@ bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WE
 bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
 bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
 bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
-
-# تهيئة webhook مرة واحدة فقط عند بدء التشغيل
-def init_webhook_sync():
-    """تهيئة webhook بشكل متزامن"""
-    try:
-        async def setup_webhook():
-            await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-            logger.info(f"Webhook set to {GAME_URL}/{BOT_TOKEN}")
-        
-        from asgiref.sync import async_to_sync
-        async_to_sync(setup_webhook)()
-    except Exception as e:
-        logger.error(f"Webhook initialization error: {e}")
-
-# تهيئة webhook عند بدء التشغيل
-init_webhook_sync()
 
 # مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
