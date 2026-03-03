@@ -380,8 +380,7 @@ def run_bot_loop():
 
 if __name__ == '__main__':
     # تشغيل حلقة الأحداث في خيط منفصل
-    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
-    bot_thread.start()
+    asyncio.run(bot_app.run_polling())
     
     # تشغيل Flask في الخيط الرئيسي
     run_flask()
