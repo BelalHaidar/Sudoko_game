@@ -30,7 +30,6 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
 # تأمين الرابط لـ Render
 Talisman(app, force_https=False, content_security_policy=None)
-limiter = Limiter(app=app, key_func=get_remote_address, storage_uri="memory://")
 
 # ربط قاعدة البيانات والمولد
 db = Database()
@@ -64,6 +63,12 @@ W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج أمر /start"""
     logger.info(f"User {update.effective_user.id} started the bot")
+    
+    # إنشاء المستخدم إذا لم يكن موجوداً
+    user = db.get_user_by_telegram_id(update.effective_user.id)
+    if not user:
+        db.create_user(update.effective_user.id, update.effective_user.username, update.effective_user.first_name)
+    
     await update.message.reply_text(
         WELCOME_TEXT,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]),
@@ -74,9 +79,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض القائمة الرئيسية"""
     user_id = update.effective_user.id
     user = db.get_user_by_telegram_id(user_id)
-    if not user:
-        db.create_user(user_id, update.effective_user.username, update.effective_user.first_name)
-        user = db.get_user_by_telegram_id(user_id)
     
     text = f"🎮 **القائمة الرئيسية**\n👤 {update.effective_user.first_name}\n💰 الرصيد: {user['points']} نقطة"
     kb = [
@@ -245,7 +247,7 @@ def create_bot_app():
     """إنشاء تطبيق البوت وإضافة جميع المعالجات"""
     
     # إعداد request مع timeout أطول
-    request_obj = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30)
+    request_obj = HTTPXRequest(connection_pool_size=8)
     bot_app = Application.builder().token(BOT_TOKEN).request(request_obj).build()
     
     # معالج أمر /start
@@ -335,14 +337,20 @@ def home():
 
 # ==================== تشغيل البوت (Polling) ====================
 
-def run_bot_polling():
+def run_bot():
     """تشغيل البوت في وضع polling"""
     try:
         logger.info("Starting bot in polling mode...")
-        bot_app = create_bot_app()
         
-        # استخدام asyncio.run() لتشغيل البوت
-        asyncio.run(bot_app.run_polling(drop_pending_updates=True))
+        # إزالة أي webhook موجود
+        import requests
+        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+        logger.info("Webhook deleted")
+        
+        # إنشاء وتشغيل البوت
+        bot_app = create_bot_app()
+        bot_app.run_polling(drop_pending_updates=True)
+        
     except Exception as e:
         logger.error(f"Bot polling error: {e}")
 
@@ -353,7 +361,7 @@ def run_flask():
 
 if __name__ == '__main__':
     # تشغيل البوت في خيط منفصل
-    bot_thread = threading.Thread(target=run_bot_polling, daemon=True)
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
     # تشغيل Flask في الخيط الرئيسي
