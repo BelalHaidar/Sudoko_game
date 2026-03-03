@@ -2,34 +2,25 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
-from asgiref.sync import async_to_sync
 import threading
-import nest_asyncio
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
+    Application, CommandHandler, CallbackQueryHandler, 
     ContextTypes, MessageHandler, filters, ConversationHandler
 )
 
-import functools
 from database import Database
 from sudoku import SudokuGenerator
 
 # ✅ الإعدادات الأساسية
 load_dotenv()
-nest_asyncio.apply()
-
-# إنشاء حلقة أحداث عامة للتطبيق
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -67,7 +58,7 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
-# --- إعداد البوت (Webhook) ---
+# --- إعداد البوت (باستخدام طريقة مبسطة) ---
 bot_app = Application.builder().token(BOT_TOKEN).build()
 
 # ✅ القائمة الرئيسية
@@ -194,8 +185,7 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ رصيدك غير كافٍ لإتمام هذه العملية.")
         return ConversationHandler.END
     
-    # خصم النقاط وإنشاء طلب سحب (تأكد من وجود جدول withdraw_requests في قاعدة البيانات)
-    # أو يمكنك استخدام جدول المراسلات لإخطار الأدمن
+    # خصم النقاط وإنشاء طلب سحب
     db.deduct_points(user_db['id'], ud['w_pts'])
     
     # إشعار الأدمن بطلب السحب
@@ -214,70 +204,28 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- مسارات Flask ---
 
-def process_update_sync(update_data):
-    """معالجة التحديث بشكل متزامن"""
-    try:
-        update = Update.de_json(update_data, bot_app.bot)
-        
-        # إنشاء حلقة أحداث جديدة
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            # التأكد من تهيئة التطبيق
-            if not bot_app.running:
-                loop.run_until_complete(bot_app.initialize())
-            
-            # معالجة التحديث
-            loop.run_until_complete(bot_app.process_update(update))
-            
-        finally:
-            # تنظيف الحلقة
-            loop.run_until_complete(asyncio.sleep(0))
-            loop.close()
-            
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
-
-background_tasks = set()
-
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook():
-    """استقبال webhook من تيليجرام"""
+    """معالجة webhook بشكل متزامن باستخدام asgiref.sync.async_to_sync"""
     update_data = request.get_json(force=True)
     
     try:
-        # معالجة التحديث بشكل غير متزامن في نفس الحلقة
         update = Update.de_json(update_data, bot_app.bot)
         
-        # التأكد من أن التطبيق يعمل
-        if not bot_app.running:
-            future = asyncio.run_coroutine_threadsafe(bot_app.initialize(), loop)
-            future.result(timeout=5)
+        # معالجة التحديث بشكل متزامن
+        async def process_update():
+            if not bot_app.running:
+                await bot_app.initialize()
+            await bot_app.process_update(update)
         
-        # معالجة التحديث
-        future = asyncio.run_coroutine_threadsafe(bot_app.process_update(update), loop)
-        
-        # إضافة callback للتعامل مع الأخطاء
-        def handle_future_done(fut):
-            try:
-                fut.result()
-            except Exception as e:
-                logger.error(f"Error in update processing: {e}")
-        
-        future.add_done_callback(handle_future_done)
-        background_tasks.add(future)
-        future.add_done_callback(background_tasks.discard)
+        # استخدام async_to_sync لتحويل الدالة غير المتزامنة إلى متزامنة
+        from asgiref.sync import async_to_sync
+        async_to_sync(process_update)()
         
     except Exception as e:
-        logger.error(f"Error in webhook: {e}")
+        logger.error(f"Error processing update: {e}")
     
     return 'OK', 200
-
-async def process_update_task(update):
-    if not bot_app.running:
-        await bot_app.initialize()
-    await bot_app.process_update(update)
 
 @app.route('/play')
 def play():
@@ -297,22 +245,18 @@ def check_solution():
     try:
         data = request.get_json()
         game_id = data.get('game_id')
-        user_solution = data.get('solution') # مصفوفة الحل المرسلة من اللاعب
+        user_solution = data.get('solution')
 
-        # جلب اللعبة من قاعدة البيانات للتأكد من الحل
         game = db.get_game(game_id)
         if not game:
             return jsonify({'success': False, 'error': 'اللعبة غير موجودة'}), 404
 
-        correct_solution = game['solution'] # الحل الصحيح المخزن عند إنشاء اللعبة
+        correct_solution = game['solution']
 
-        # مقارنة الحلول
         if user_solution == correct_solution:
-            # إضافة النقاط بناءً على المستوى
             points_map = {'easy': 500, 'medium': 1000, 'hard': 1500, 'expert': 5000}
             reward = points_map.get(game['difficulty'], 0)
             
-            # تحديث حالة اللعبة في قاعدة البيانات (اختياري) وتزويد رصيد المستخدم
             db.add_points(game['user_id'], reward, reason=f"Won {game['difficulty']} game")
             
             return jsonify({'success': True, 'reward': reward})
@@ -334,7 +278,8 @@ charge_handler = ConversationHandler(
         C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
         C_CONFIRM: [CallbackQueryHandler(charge_final, pattern='^c_confirm$')]
     },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
+    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+    per_message=False
 )
 
 withdraw_handler = ConversationHandler(
@@ -345,70 +290,38 @@ withdraw_handler = ConversationHandler(
         W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
         W_CONFIRM: [CallbackQueryHandler(withdraw_final, pattern='^w_confirm$')]
     },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')]
+    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+    per_message=False
 )
 
+# إضافة المعالجات
 bot_app.add_handler(charge_handler)
 bot_app.add_handler(withdraw_handler)
 bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WELCOME_TEXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), parse_mode='Markdown')))
 bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
-async def setup_webhook():
-    await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
+bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
 
-async def choose_level(update, context):
-    user_id = update.effective_user.id
-    kb = [[InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],[InlineKeyboardButton("🥈 متوسط", url=f"{GAME_URL}/play?user={user_id}&difficulty=medium")],[InlineKeyboardButton("🥇 صعب", url=f"{GAME_URL}/play?user={user_id}&difficulty=hard")],[InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
-    await update.callback_query.edit_message_text("🎯 **اختر المستوى:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+# تهيئة webhook مرة واحدة فقط عند بدء التشغيل
+def init_webhook_sync():
+    """تهيئة webhook بشكل متزامن"""
+    try:
+        async def setup_webhook():
+            await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+            logger.info(f"Webhook set to {GAME_URL}/{BOT_TOKEN}")
+        
+        from asgiref.sync import async_to_sync
+        async_to_sync(setup_webhook)()
+    except Exception as e:
+        logger.error(f"Webhook initialization error: {e}")
 
-async def profile_view(update, context):
-    user = db.get_user_by_telegram_id(update.effective_user.id)
-    text = f"👤 **حسابي**\n💰 الرصيد: {user['points']} نقطة\n🆔 معرفك: `{user['telegram_id']}`"
-    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]), parse_mode='Markdown')
-
-bot_app.add_handler(CallbackQueryHandler(choose_level, pattern='^choose_level$'))
-bot_app.add_handler(CallbackQueryHandler(profile_view, pattern='^profile$'))
-
-@app.before_request
-def init_webhook():
-    """تهيئة webhook مرة واحدة فقط"""
-    if not hasattr(app, 'webhook_initialized'):
-        try:
-            # تشغيل تهيئة webhook في نفس الحلقة
-            async def setup_webhook():
-                await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-                logger.info(f"Webhook set to {GAME_URL}/{BOT_TOKEN}")
-            
-            # تشغيل الدالة غير المتزامنة بشكل متزامن
-            future = asyncio.run_coroutine_threadsafe(setup_webhook(), loop)
-            future.result(timeout=10)
-            
-            app.webhook_initialized = True
-            
-        except Exception as e:
-            logger.error(f"Webhook initialization error: {e}")
+# تهيئة webhook عند بدء التشغيل
+init_webhook_sync()
 
 # مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
 def home():
     return "Sudoku Bot is Running!", 200
-
-def start_event_loop():
-    """تشغيل حلقة الأحداث في خلفية التطبيق"""
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-# بدء حلقة الأحداث في خيط منفصل
-event_loop_thread = threading.Thread(target=start_event_loop, daemon=True)
-event_loop_thread.start()
-
-# تهيئة تطبيق البوت في حلقة الأحداث
-async def init_bot():
-    await bot_app.initialize()
-    await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-    logger.info("Bot initialized and webhook set")
-
-future = asyncio.run_coroutine_threadsafe(init_bot(), loop)
-future.result(timeout=10)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
