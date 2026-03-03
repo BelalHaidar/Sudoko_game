@@ -63,59 +63,7 @@ W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 # --- إعداد البوت ---
 bot_app = Application.builder().token(BOT_TOKEN).build()
 
-# إنشاء حلقة أحداث دائمة وقائمة انتظار
-bot_loop = asyncio.new_event_loop()
-update_queue = Queue()
-
-def bot_worker():
-    """تشغيل حلقة أحداث دائمة للبوت"""
-    asyncio.set_event_loop(bot_loop)
-    
-    # تهيئة البوت وتعيين webhook
-    async def init_bot():
-        await bot_app.initialize()
-        success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-        if success:
-            logger.info(f"✅ Bot initialized and webhook set to {GAME_URL}/{BOT_TOKEN}")
-        else:
-            logger.error("❌ Failed to set webhook")
-    
-    # تشغيل التهيئة
-    try:
-        bot_loop.run_until_complete(init_bot())
-    except Exception as e:
-        logger.error(f"Error in bot initialization: {e}")
-    
-    # معالجة التحديثات من قائمة الانتظار
-    async def process_updates():
-        while True:
-            try:
-                if not update_queue.empty():
-                    update_data = update_queue.get()
-                    update = Update.de_json(update_data, bot_app.bot)
-                    await bot_app.process_update(update)
-                    logger.info(f"Processed update: {update.update_id}")
-                else:
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Error in bot_worker: {e}")
-                await asyncio.sleep(1)
-    
-    # تشغيل حلقة معالجة التحديثات
-    try:
-        bot_loop.run_until_complete(process_updates())
-    except Exception as e:
-        logger.error(f"Bot worker stopped: {e}")
-
-# بدء تشغيل العامل في خيط منفصل
-bot_thread = threading.Thread(target=bot_worker, daemon=True)
-bot_thread.start()
-
-# انتظر قليلاً للتأكد من تهيئة البوت
-time.sleep(2)
-
-# باقي الكود كما هو (جميع الـ handlers)...
-
+# تعريف جميع الـ handlers أولاً
 # ✅ القائمة الرئيسية
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -240,10 +188,8 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ رصيدك غير كافٍ لإتمام هذه العملية.")
         return ConversationHandler.END
     
-    # خصم النقاط وإنشاء طلب سحب
     db.deduct_points(user_db['id'], ud['w_pts'])
     
-    # إشعار الأدمن بطلب السحب
     admin_text = (
         f"💰 **طلب سحب جديد**\n"
         f"👤 المستخدم: {query.from_user.first_name}\n"
@@ -256,6 +202,104 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text("✅ **تم استلام طلب السحب بنجاح!** سيتم تحويل المبلغ خلال 24 ساعة.")
     return ConversationHandler.END
+
+# --- تسجيل المعالجات (Handlers) ---
+# هذا يجب أن يكون قبل بدء تشغيل البوت
+
+# معالج أمر /start
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        WELCOME_TEXT, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), 
+        parse_mode='Markdown'
+    )
+
+# إنشاء معالجات المحادثات
+charge_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
+    states={
+        C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
+        C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')],
+        C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_input)],
+        C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
+        C_CONFIRM: [CallbackQueryHandler(charge_final, pattern='^c_confirm$')]
+    },
+    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+    per_message=False
+)
+
+withdraw_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
+    states={
+        W_METH: [CallbackQueryHandler(withdraw_meth_selected, pattern='^wm_')],
+        W_AMT: [CallbackQueryHandler(withdraw_amt_selected, pattern='^wa_')],
+        W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
+        W_CONFIRM: [CallbackQueryHandler(withdraw_final, pattern='^w_confirm$')]
+    },
+    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
+    per_message=False
+)
+
+# إضافة جميع المعالجات إلى البوت
+bot_app.add_handler(CommandHandler("start", start_command))
+bot_app.add_handler(charge_handler)
+bot_app.add_handler(withdraw_handler)
+bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
+bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
+bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
+
+# --- الآن يمكننا بدء تشغيل البوت ---
+
+# إنشاء حلقة أحداث دائمة وقائمة انتظار
+bot_loop = asyncio.new_event_loop()
+update_queue = Queue()
+
+def bot_worker():
+    """تشغيل حلقة أحداث دائمة للبوت"""
+    asyncio.set_event_loop(bot_loop)
+    
+    # تهيئة البوت وتعيين webhook
+    async def init_bot():
+        await bot_app.initialize()
+        success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
+        if success:
+            logger.info(f"✅ Bot initialized and webhook set to {GAME_URL}/{BOT_TOKEN}")
+        else:
+            logger.error("❌ Failed to set webhook")
+    
+    # تشغيل التهيئة
+    try:
+        bot_loop.run_until_complete(init_bot())
+    except Exception as e:
+        logger.error(f"Error in bot initialization: {e}")
+    
+    # معالجة التحديثات من قائمة الانتظار
+    async def process_updates():
+        while True:
+            try:
+                if not update_queue.empty():
+                    update_data = update_queue.get()
+                    update = Update.de_json(update_data, bot_app.bot)
+                    await bot_app.process_update(update)
+                    logger.info(f"Processed update: {update.update_id}")
+                else:
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.error(f"Error in bot_worker: {e}")
+                await asyncio.sleep(1)
+    
+    # تشغيل حلقة معالجة التحديثات
+    try:
+        bot_loop.run_until_complete(process_updates())
+    except Exception as e:
+        logger.error(f"Bot worker stopped: {e}")
+
+# بدء تشغيل العامل في خيط منفصل
+bot_thread = threading.Thread(target=bot_worker, daemon=True)
+bot_thread.start()
+
+# انتظر قليلاً للتأكد من تهيئة البوت
+time.sleep(2)
 
 # --- مسارات Flask ---
 
@@ -309,41 +353,6 @@ def check_solution():
     except Exception as e:
         logger.error(f"Error in check_solution: {e}")
         return jsonify({'success': False, 'error': 'خطأ داخلي في السيرفر'}), 500
-
-# --- تسجيل المعالجات (Handlers) ---
-
-charge_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_charge, pattern='^start_charge$')],
-    states={
-        C_PKG: [CallbackQueryHandler(charge_pkg_selected, pattern='^cp_')],
-        C_METH: [CallbackQueryHandler(charge_meth_selected, pattern='^cm_')],
-        C_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_phone_input)],
-        C_TRANS: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_trans_input)],
-        C_CONFIRM: [CallbackQueryHandler(charge_final, pattern='^c_confirm$')]
-    },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
-    per_message=False
-)
-
-withdraw_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_withdraw, pattern='^start_withdraw$')],
-    states={
-        W_METH: [CallbackQueryHandler(withdraw_meth_selected, pattern='^wm_')],
-        W_AMT: [CallbackQueryHandler(withdraw_amt_selected, pattern='^wa_')],
-        W_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_phone_input)],
-        W_CONFIRM: [CallbackQueryHandler(withdraw_final, pattern='^w_confirm$')]
-    },
-    fallbacks=[CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$')],
-    per_message=False
-)
-
-# إضافة المعالجات
-bot_app.add_handler(charge_handler)
-bot_app.add_handler(withdraw_handler)
-bot_app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text(WELCOME_TEXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ موافق", callback_data='back_to_menu')]]), parse_mode='Markdown')))
-bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
-bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
-bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
 
 # مسار أساسي للتأكد من عمل السيرفر (Health Check)
 @app.route('/')
