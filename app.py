@@ -8,10 +8,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 import threading
-import nest_asyncio
-
-# تطبيق nest_asyncio للسماح بتداخل حلقات الأحداث
-nest_asyncio.apply()
 
 # مكتبات تيليجرام
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -63,16 +59,6 @@ WITHDRAW_PACKAGES = [100, 300, 500, 1000]
 C_PKG, C_METH, C_PHONE, C_TRANS, C_CONFIRM = range(5)
 W_METH, W_AMT, W_PHONE, W_CONFIRM = range(10, 14)
 
-# ==================== إعداد البوت بشكل صحيح ====================
-
-# إنشاء حلقة أحداث دائمة للتطبيق
-bot_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(bot_loop)
-
-# إنشاء تطبيق البوت
-request_obj = HTTPXRequest(connection_pool_size=8)
-bot_app = Application.builder().token(BOT_TOKEN).request(request_obj).build()
-
 # ==================== جميع handlers هنا ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,6 +89,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.callback_query.answer()
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     return ConversationHandler.END
@@ -110,6 +97,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض الملف الشخصي"""
     query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     user = db.get_user_by_telegram_id(user_id)
     
@@ -119,6 +107,8 @@ async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار مستوى الصعوبة"""
+    query = update.callback_query
+    await query.answer()
     user_id = update.effective_user.id
     kb = [
         [InlineKeyboardButton("🥉 سهل", url=f"{GAME_URL}/play?user={user_id}&difficulty=easy")],
@@ -127,19 +117,22 @@ async def choose_level_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("👑 خبير", url=f"{GAME_URL}/play?user={user_id}&difficulty=expert")],
         [InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]
     ]
-    await update.callback_query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await query.edit_message_text("🎯 **اختر مستوى التحدي:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ========== نظام الشحن ==========
 async def start_charge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بدء عملية الشحن"""
+    query = update.callback_query
+    await query.answer()
     kb = [[InlineKeyboardButton(f"📦 {s}ل.س ({p}ن)", callback_data=f"cp_{s}_{p}")] for s, p in CHARGE_PACKAGES]
     kb.append([InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')])
-    await update.callback_query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await query.edit_message_text("💳 **اختر باقة الشحن:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return C_PKG
 
 async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار باقة الشحن"""
     query = update.callback_query
+    await query.answer()
     context.user_data['c_pkg'] = query.data
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل", callback_data='cm_Syriatel')], 
           [InlineKeyboardButton("🟡 MTN", callback_data='cm_MTN')], 
@@ -150,6 +143,7 @@ async def charge_pkg_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def charge_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار طريقة الدفع"""
     query = update.callback_query
+    await query.answer()
     method = query.data.split('_')[1]
     context.user_data['c_meth'] = method
     instr = "✅ **سيرياتيل:** حوّل إلى: `49725859`" if method == 'Syriatel' else "✅ **MTN:** حوّل إلى: `8598040534523762`"
@@ -173,6 +167,7 @@ async def charge_trans_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def charge_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تأكيد الشحن وإرسال إشعار للأدمن"""
     query = update.callback_query
+    await query.answer()
     ud = context.user_data
     pkg = ud['c_pkg'].split('_')
     user_db = db.get_user_by_telegram_id(query.from_user.id)
@@ -185,13 +180,16 @@ async def charge_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== نظام السحب ==========
 async def start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بدء عملية السحب"""
+    query = update.callback_query
+    await query.answer()
     kb = [[InlineKeyboardButton("🇸🇾 سيرياتيل كاش", callback_data='wm_Syriatel'), InlineKeyboardButton("🟡 MTN كاش", callback_data='wm_MTN')], [InlineKeyboardButton("🔙 إلغاء", callback_data='back_to_menu')]]
-    await update.callback_query.edit_message_text("🏦 **اختر طريقة السحب:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await query.edit_message_text("🏦 **اختر طريقة السحب:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return W_METH
 
 async def withdraw_meth_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار طريقة السحب"""
     query = update.callback_query
+    await query.answer()
     context.user_data['w_meth'] = query.data.split('_')[1]
     kb = [[InlineKeyboardButton(f"{s} ل.س", callback_data=f"wa_{s}_{s*10}")] for s in WITHDRAW_PACKAGES]
     await query.edit_message_text("💰 **اختر المبلغ:**", reply_markup=InlineKeyboardMarkup(kb))
@@ -200,6 +198,7 @@ async def withdraw_meth_selected(update: Update, context: ContextTypes.DEFAULT_T
 async def withdraw_amt_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """اختيار المبلغ"""
     query = update.callback_query
+    await query.answer()
     _, syp, pts = query.data.split('_')
     context.user_data.update({'w_syp': int(syp), 'w_pts': int(pts)})
     await query.edit_message_text(f"📱 **أرسل رقم الهاتف** لاستلام المبلغ:")
@@ -217,6 +216,7 @@ async def withdraw_phone_input(update: Update, context: ContextTypes.DEFAULT_TYP
 async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تأكيد السحب"""
     query = update.callback_query
+    await query.answer()
     user_db = db.get_user_by_telegram_id(query.from_user.id)
     ud = context.user_data
 
@@ -239,10 +239,14 @@ async def withdraw_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ **تم استلام طلب السحب بنجاح!** سيتم تحويل المبلغ خلال 24 ساعة.")
     return ConversationHandler.END
 
-# ==================== تسجيل المعالجات ====================
+# ==================== إعداد البوت ====================
 
-def setup_handlers():
-    """إعداد جميع معالجات البوت"""
+def create_bot_app():
+    """إنشاء تطبيق البوت وإضافة جميع المعالجات"""
+    
+    # إعداد request مع timeout أطول
+    request_obj = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30)
+    bot_app = Application.builder().token(BOT_TOKEN).request(request_obj).build()
     
     # معالج أمر /start
     bot_app.add_handler(CommandHandler("start", start_command))
@@ -282,47 +286,10 @@ def setup_handlers():
     bot_app.add_handler(CallbackQueryHandler(show_main_menu, pattern='^back_to_menu$'))
     bot_app.add_handler(CallbackQueryHandler(choose_level_handler, pattern='^choose_level$'))
     bot_app.add_handler(CallbackQueryHandler(profile_handler, pattern='^profile$'))
-
-# تهيئة المعالجات
-setup_handlers()
-
-# ==================== تهيئة البوت في حلقة الأحداث الدائمة ====================
-
-async def initialize_bot():
-    """تهيئة البوت وتعيين webhook"""
-    await bot_app.initialize()
-    success = await bot_app.bot.set_webhook(url=f"{GAME_URL}/{BOT_TOKEN}")
-    if success:
-        logger.info(f"✅ Webhook set to {GAME_URL}/{BOT_TOKEN}")
-    else:
-        logger.error("❌ Failed to set webhook")
-
-# تشغيل التهيئة في حلقة الأحداث
-bot_loop.run_until_complete(initialize_bot())
+    
+    return bot_app
 
 # ==================== مسارات Flask ====================
-
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    """استقبال تحديثات تيليجرام - يتم معالجتها في حلقة الأحداث الدائمة"""
-    try:
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, bot_app.bot)
-        
-        # معالجة التحديث في حلقة الأحداث الدائمة
-        future = asyncio.run_coroutine_threadsafe(
-            bot_app.process_update(update), 
-            bot_loop
-        )
-        
-        # انتظار النتيجة (مع timeout)
-        future.result(timeout=5)
-        logger.debug(f"Processed update {update.update_id}")
-        
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
-    
-    return 'OK', 200
 
 @app.route('/play')
 def play():
@@ -366,21 +333,28 @@ def check_solution():
 def home():
     return "Sudoku Bot is Running!", 200
 
-# ==================== تشغيل التطبيق ====================
+# ==================== تشغيل البوت (Polling) ====================
+
+def run_bot_polling():
+    """تشغيل البوت في وضع polling"""
+    try:
+        logger.info("Starting bot in polling mode...")
+        bot_app = create_bot_app()
+        
+        # استخدام asyncio.run() لتشغيل البوت
+        asyncio.run(bot_app.run_polling(drop_pending_updates=True))
+    except Exception as e:
+        logger.error(f"Bot polling error: {e}")
 
 def run_flask():
-    """تشغيل Flask في الخيط الرئيسي"""
+    """تشغيل Flask"""
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
 
-def run_bot_loop():
-    """تشغيل حلقة الأحداث في خيط منفصل"""
-    asyncio.set_event_loop(bot_loop)
-    bot_loop.run_forever()
-
 if __name__ == '__main__':
-    # تشغيل حلقة الأحداث في خيط منفصل
-    asyncio.run(bot_app.run_polling())
+    # تشغيل البوت في خيط منفصل
+    bot_thread = threading.Thread(target=run_bot_polling, daemon=True)
+    bot_thread.start()
     
     # تشغيل Flask في الخيط الرئيسي
     run_flask()
