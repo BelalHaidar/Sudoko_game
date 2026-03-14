@@ -56,6 +56,34 @@ def play():
         logger.error(f"Error in play route: {e}")
         return "Internal Server Error", 500
 
+@app.route('/get_hint', methods=['POST'])
+def get_hint():
+    data = request.get_json()
+    game_id = data.get('game_id')
+    
+    # جلب بيانات اللعبة من القاعدة
+    game = db.get_game(game_id)
+    if not game:
+        return jsonify({'success': False, 'error': 'اللعبة غير موجودة'})
+
+    # التأكد من عدم تجاوز الحد (5 تلميحات)
+    if game['hints_used'] >= 5:
+        return jsonify({'success': False, 'error': '⚠️ عذراً، لقد استهلكت جميع التلميحات المسموحة (5/5)'})
+
+    # الحصول على تلميح عشوائي باستخدام SudokuGenerator
+    hint = generator.get_hint(game['puzzle'], game['solution'])
+    
+    if hint:
+        # تحديث عدد التلميحات المستخدمة في القاعدة
+        db.increment_hints(game_id)
+        return jsonify({
+            'success': True, 
+            'hint': hint, 
+            'hints_remaining': 5 - (game['hints_used'] + 1)
+        })
+    
+    return jsonify({'success': False, 'error': 'لا توجد خلايا فارغة'})
+
 @app.route('/check_solution', methods=['POST'])
 def check_solution():
     try:
