@@ -17,19 +17,17 @@ class Database:
     def get_connection(self):
         conn = None
         try:
-            # الاتصال بـ PostgreSQL مع تفعيل SSL للأمان
-            conn = psycopg2.connect(self.db_url)
+            conn = psycopg2.connect(self.db_url) 
             yield conn
         except Exception as e:
             logger.error(f"Database error: {e}")
-            if conn:
-                conn.rollback()
+            if conn: conn.rollback()
             raise
         finally:
-            if conn:
-                conn.close()
+            if conn: conn.close()
     
     def _init_db(self):
+        """إنشاء الجداول المطلوبة في PostgreSQL (Supabase)"""
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 # جدول المستخدمين
@@ -55,6 +53,20 @@ class Database:
                     processed_by BIGINT,
                     processed_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                
+                # جدول طلبات السحب
+                cursor.execute('''CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id),
+                    amount_points INTEGER NOT NULL,
+                    amount_money REAL NOT NULL,
+                    final_amount REAL NOT NULL,
+                    method TEXT,
+                    receiver_phone TEXT,
+                    status TEXT DEFAULT 'pending',
+                    processed_by BIGINT,
+                    processed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
                 # جدول الألعاب
                 cursor.execute('''CREATE TABLE IF NOT EXISTS games (
@@ -70,6 +82,7 @@ class Database:
                 
                 conn.commit()
 
+    # --- إدارة المستخدمين ---
     def get_user_by_telegram_id(self, telegram_id):
         with self.get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -86,7 +99,6 @@ class Database:
                 )
                 conn.commit()
 
-    # ✅ دالة إضافة النقاط (تُستخدم عند الفوز أو عند قبول الشحن)
     def add_points(self, user_id, amount, reason=""):
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -101,7 +113,7 @@ class Database:
                 conn.commit()
                 return cursor.rowcount > 0
 
-    # ✅ دالة إنشاء طلب شحن (التي يستدعيها ملف app.py)
+    # --- إدارة الشحن ---
     def create_charge_request(self, user_id, amount_ls, points, method, sender_phone, trans_id):
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -112,6 +124,51 @@ class Database:
                 conn.commit()
                 return rid
 
+    def get_charge_details(self, request_id):
+        """مهمة للأدمن لمعرفة تفاصيل الشحن قبل القبول"""
+        with self.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute('''SELECT c.*, u.telegram_id FROM charge_requests c 
+                                 JOIN users u ON c.user_id = u.id WHERE c.id = %s''', (request_id,))
+                return cursor.fetchone()
+
+    def update_charge_status(self, rid, status, admin_id):
+        with self.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('UPDATE charge_requests SET status=%s, processed_by=%s, processed_at=%s WHERE id=%s',
+                             (status, admin_id, datetime.now(), rid))
+                conn.commit()
+
+    # --- إدارة السحب ---
+    def create_withdrawal_request(self, user_id, points, money, final_money, method, phone):
+        with self.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''INSERT INTO withdrawal_requests 
+                                 (user_id, amount_points, amount_money, final_amount, method, receiver_phone) 
+                                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id''', 
+                              (user_id, points, money, final_money, method, phone))
+                rid = cursor.fetchone()[0]
+                conn.commit()
+                return rid
+
+    def get_withdraw_details(self, request_id):
+        """مهمة للأدمن لمعرفة تفاصيل السحب قبل التنفيذ"""
+        with self.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute('''SELECT w.*, u.telegram_id FROM withdrawal_requests w 
+                                 JOIN users u ON w.user_id = u.id WHERE w.id = %s''', (request_id,))
+                return cursor.fetchone()
+
+    def update_withdraw_status(self, request_id, status, admin_id=None):
+        with self.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''UPDATE withdrawal_requests 
+                                 SET status = %s, processed_by = %s, processed_at = %s 
+                                 WHERE id = %s''', 
+                              (status, admin_id, datetime.now(), request_id))
+                conn.commit()
+
+    # --- إدارة الألعاب ---
     def save_game(self, user_id, difficulty, puzzle, solution):
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
